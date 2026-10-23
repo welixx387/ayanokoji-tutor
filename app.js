@@ -170,7 +170,9 @@
      а строка в общем рейтинге board/<id> — у каждого своя, писать в чужую нельзя. */
   const standalone = () => !(window.claude && window.claude.use);
   const useCap = n => (standalone() ? Promise.resolve(null) : window.claude.use(n).catch(() => null));
-  const cloud = { state: 'loading', uid: null, me: null, db: null, user: null, ref: null, writable: true, board: true, timer: 0, syncedAt: 0, busy: false, dirty: false };
+  // mode: 'claude' — вход через Claude; 'server' — свой сервер с логином и паролем (Vercel); 'local' — без сервера (GitHub Pages)
+  const cloud = { mode: null, acc: null, state: 'loading', uid: null, me: null, db: null, user: null, ref: null, writable: true, board: true, timer: 0, pending: false, syncedAt: 0, busy: false, dirty: false };
+  const MAIN_SITE = 'https://ayanokoji-tutor.vercel.app/';
   const maxMap = (a = {}, b = {}) => { const o = Object.assign({}, b); for (const k in a) o[k] = Math.max(a[k] ?? -1, b[k] ?? -1); return o; };
   function mergeState(a, b) {
     const o = Object.assign(blank(), b, a);
@@ -189,6 +191,8 @@
     return o;
   }
   async function cloudInit() {
+    if (standalone()) return serverInit();
+    cloud.mode = 'claude';
     const [user, db] = await Promise.all([useCap('user'), useCap('db')]);
     cloud.user = user; cloud.db = db;
     const uid = user ? await user.id() : null;
@@ -208,9 +212,154 @@
   }
   function cloudLater() {
     if (cloud.state !== 'on' || !cloud.writable) return;
-    clearTimeout(cloud.timer); cloud.timer = setTimeout(pushCloud, 1500);
+    clearTimeout(cloud.timer); cloud.pending = true; cloud.timer = setTimeout(pushCloud, 1500);
   }
+
+  /* ---------- вход по логину и паролю (сервер на Vercel) ---------- */
+  async function api(path, body) {
+    const opt = body === undefined
+      ? { credentials: 'same-origin', headers: { Accept: 'application/json' } }
+      : { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-AYK': '1' }, body: JSON.stringify(body) };
+    const r = await fetch('api/' + path, opt);
+    let data = null;
+    try { data = await r.json(); } catch (e) { /* не JSON — сервера нет */ }
+    return { ok: r.ok && !!data, status: r.status, data: data || {} };
+  }
+  async function serverInit() {
+    let r = null;
+    try { r = await api('me'); } catch (e) { /* сеть недоступна */ }
+    if (r && r.ok && r.data.user) { cloud.mode = 'server'; await signedIn(r.data); }
+    else if (r && r.ok && r.data.user === null) { cloud.mode = 'server'; cloud.state = 'guest'; acctHud(); }
+    else { cloud.mode = 'local'; cloud.state = 'guest'; acctHud(); }
+    softRefresh();
+  }
+  // после входа: прогресс из браузера и из аккаунта объединяются (берётся лучшее)
+  async function signedIn(data) {
+    cloud.acc = data.user; cloud.state = 'on';
+    st = mergeState(st, data.state || {});
+    st.nick = data.user.nick;
+    store.set('state', st); hud(); tutorHud(); acctHud();
+    await pushServer();
+  }
+  function signedOut() {
+    cloud.acc = null; cloud.state = 'guest'; cloud.pending = false; clearTimeout(cloud.timer);
+    st = Object.assign(blank(), { tutor: st.tutor });
+    store.set('state', st); hud(); tutorHud(); acctHud();
+    cur = { v: '' }; route();
+  }
+  async function pushServer() {
+    if (cloud.mode !== 'server' || cloud.state !== 'on') return;
+    if (cloud.busy) { cloud.dirty = true; return; }
+    cloud.busy = true; cloud.pending = false;
+    try {
+      const r = await api('save', { state: st });
+      if (r.ok) cloud.syncedAt = Date.now();
+      else if (r.status === 401) { cloud.acc = null; cloud.state = 'guest'; toast('Сессия закончилась', 'Войди снова, чтобы прогресс сохранялся в аккаунте.', false, anyTutor()); }
+    } catch (e) { cloud.pending = true; /* нет связи — сохраним при следующем изменении */ }
+    cloud.busy = false;
+    acctHud();
+    if (cloud.dirty) { cloud.dirty = false; cloudLater(); }
+  }
+  // при закрытии вкладки досылаем несохранённое
+  addEventListener('pagehide', () => {
+    if (cloud.mode !== 'server' || cloud.state !== 'on' || !cloud.pending) return;
+    const body = JSON.stringify({ state: st });
+    if (body.length > 60000) return;
+    try { fetch('api/save', { method: 'POST', keepalive: true, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-AYK': '1' }, body }); } catch (e) { /* ignore */ }
+  });
+  const srvAuthHTML = tab => `<p class="eyebrow">Аккаунт ученика</p>
+<div class="tmode acct-tabs" role="tablist"><button type="button" role="tab" data-act="accttab" data-tab="login" aria-checked="${tab === 'login'}">Вход</button><button type="button" role="tab" data-act="accttab" data-tab="reg" aria-checked="${tab === 'reg'}">Регистрация</button></div>
+${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
+<label class="stu-name" for="fLogin">Ник или email</label>
+<input id="fLogin" class="stu-inp" name="login" autocomplete="username" maxlength="120" required>
+<label class="stu-name" for="fPass">Пароль</label>
+<input id="fPass" class="stu-inp" type="password" name="password" autocomplete="current-password" maxlength="128" required>
+<p class="acct-err" role="alert" hidden></p>
+<div class="cta"><button type="submit" class="btn btn-red">Войти</button><button type="button" class="btn" data-act="acctclose">Закрыть</button></div>
+<p class="acct-note">Нет аккаунта? <button type="button" class="linkbtn" data-act="accttab" data-tab="reg">Зарегистрируйся</button> — прогресс из этого браузера перейдёт в аккаунт.</p>
+</form>` : `<form class="acct-form" data-form="reg" novalidate>
+<label class="stu-name" for="fNick">Ник в рейтинге</label>
+<input id="fNick" class="stu-inp" name="nick" autocomplete="nickname" maxlength="24" placeholder="Например, Кей-сан" required>
+<label class="stu-name" for="fMail">Email — по желанию</label>
+<input id="fMail" class="stu-inp" type="email" name="email" autocomplete="email" maxlength="120" placeholder="Можно войти и по нику">
+<label class="stu-name" for="fPass">Пароль — не короче 8 символов</label>
+<input id="fPass" class="stu-inp" type="password" name="password" autocomplete="new-password" maxlength="128" required>
+<label class="stu-name" for="fPass2">Повтори пароль</label>
+<input id="fPass2" class="stu-inp" type="password" name="password2" autocomplete="new-password" maxlength="128" required>
+<p class="acct-err" role="alert" hidden></p>
+<div class="cta"><button type="submit" class="btn btn-red">Зарегистрироваться</button><button type="button" class="btn" data-act="acctclose">Закрыть</button></div>
+<p class="acct-note">Очки, уроки, экзамены и результаты IQ из этого браузера сохранятся в новый аккаунт. Сайт хранит только ник, email (если указан) и прогресс; пароль — в виде необратимого хэша. Восстановить забытый пароль пока нельзя — запомни его.</p>
+</form>`}`;
+  const srvProfileHTML = () => {
+    const when = cloud.syncedAt ? new Date(cloud.syncedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+    return `<p class="eyebrow">Профиль ученика</p>
+<div class="acct-me"><span class="lb-ini big" id="acctIni"></span><div><b id="acctName"></b><span>Прогресс сохраняется в аккаунте${when ? ` · синхронизация ${when}` : ''}</span></div></div>
+<form class="acct-form" data-form="profile" novalidate>
+<label class="stu-name" for="fNick">Ник в рейтинге</label>
+<input id="fNick" class="stu-inp" name="nick" maxlength="24" value="${esc(cloud.acc.nick)}" required>
+<label class="stu-name" for="fMail">Email — по желанию</label>
+<input id="fMail" class="stu-inp" type="email" name="email" maxlength="120" value="${esc(cloud.acc.email || '')}">
+<p class="acct-err" role="alert" hidden></p>
+<div class="cta"><button type="submit" class="btn btn-red">Сохранить</button><button type="button" class="btn" data-act="srvlogout">Выйти</button><button type="button" class="btn" data-act="acctclose">Закрыть</button></div>
+</form>
+<details class="acct-more"><summary>Сменить пароль</summary><form class="acct-form" data-form="password" novalidate>
+<label class="stu-name" for="fOld">Текущий пароль</label>
+<input id="fOld" class="stu-inp" type="password" name="old" autocomplete="current-password" maxlength="128" required>
+<label class="stu-name" for="fNext">Новый пароль — не короче 8 символов</label>
+<input id="fNext" class="stu-inp" type="password" name="next" autocomplete="new-password" maxlength="128" required>
+<p class="acct-err" role="alert" hidden></p>
+<div class="cta"><button type="submit" class="btn">Сменить пароль</button></div>
+</form></details>
+<details class="acct-more"><summary>Удалить аккаунт</summary><form class="acct-form" data-form="delete" novalidate>
+<p class="acct-note">Аккаунт и весь сохранённый в нём прогресс будут удалены без возможности восстановления.</p>
+<label class="stu-name" for="fDel">Пароль для подтверждения</label>
+<input id="fDel" class="stu-inp" type="password" name="password" autocomplete="current-password" maxlength="128" required>
+<p class="acct-err" role="alert" hidden></p>
+<div class="cta"><button type="submit" class="btn btn-red">Удалить навсегда</button></div>
+</form></details>`;
+  };
+  async function acctSubmit(f) {
+    const kind = f.dataset.form, val = n => (f.elements[n] ? f.elements[n].value : '');
+    const err = $('.acct-err', f), btn = $('[type="submit"]', f);
+    const showErr = (m, field) => { err.textContent = m; err.hidden = false; const el = field && f.elements[field]; if (el) el.focus(); };
+    err.hidden = true;
+    if (kind === 'reg' && val('password') !== val('password2')) return showErr('Пароли не совпадают.', 'password2');
+    if (kind === 'profile' || kind === 'password' || kind === 'delete') await pushServer();
+    btn.disabled = true;
+    let r;
+    try {
+      if (kind === 'login') r = await api('login', { login: val('login'), password: val('password') });
+      else if (kind === 'reg') r = await api('register', { nick: val('nick'), email: val('email'), password: val('password'), state: st });
+      else if (kind === 'profile') r = await api('profile', { nick: val('nick'), email: val('email') });
+      else if (kind === 'password') r = await api('password', { old: val('old'), next: val('next') });
+      else if (kind === 'delete') r = await api('delete', { password: val('password') });
+    } catch (e) { r = { ok: false, status: 0, data: { error: 'Нет связи с сервером. Проверь интернет и попробуй ещё раз.' } }; }
+    btn.disabled = false;
+    if (!r.ok) {
+      if (r.status === 401 && kind !== 'login') { cloud.acc = null; cloud.state = 'guest'; acctHud(); }
+      return showErr(r.data.error || 'Не получилось. Попробуй ещё раз.', r.data.field);
+    }
+    if (kind === 'login' || kind === 'reg') {
+      await signedIn(r.data);
+      closeAcct();
+      toast(kind === 'reg' ? 'Аккаунт создан' : 'С возвращением', kind === 'reg' ? `Ты в рейтинге как «${cloud.acc.nick}». Прогресс теперь сохраняется в аккаунте.` : `Прогресс аккаунта «${cloud.acc.nick}» загружен.`, false, anyTutor());
+      softRefresh();
+    } else if (kind === 'profile') {
+      cloud.acc = r.data.user; st.nick = cloud.acc.nick; store.set('state', st); acctHud(); closeAcct();
+      toast('Профиль сохранён', `Теперь ты в рейтинге как «${cloud.acc.nick}».`, false, anyTutor());
+      softRefresh();
+    } else if (kind === 'password') {
+      closeAcct();
+      toast('Пароль изменён', 'На других устройствах нужно будет войти заново.', false, anyTutor());
+    } else if (kind === 'delete') {
+      closeAcct(); signedOut();
+      toast('Аккаунт удалён', 'Все данные аккаунта стёрты.', false, anyTutor());
+    }
+  }
+
   async function pushCloud() {
+    if (cloud.mode === 'server') return pushServer();
+    cloud.pending = false;
     if (!cloud.ref || !cloud.writable) return;
     if (cloud.busy) { cloud.dirty = true; return; }
     cloud.busy = true;
@@ -234,16 +383,26 @@
   function acctHud() {
     const b = $('#acctBtn'); if (!b) return;
     const img = $('#acctAva'), t = $('#acctTxt');
-    if (cloud.state === 'on' || cloud.state === 'readonly') {
+    if (cloud.mode === 'server' && cloud.state === 'on') {
+      img.hidden = true; t.textContent = cloud.acc.nick; b.classList.remove('ro');
+      b.title = cloud.pending ? 'Сохраняю прогресс…' : 'Прогресс сохранён в аккаунте';
+    } else if (cloud.state === 'on' || cloud.state === 'readonly') {
       img.src = cloud.me ? cloud.me.avatarUrl : ''; img.hidden = !cloud.me;
       t.textContent = st.nick || (cloud.me && cloud.me.name) || 'Профиль';
       b.classList.toggle('ro', cloud.state === 'readonly');
       b.title = cloud.state === 'on' ? 'Прогресс синхронизирован' : 'Только чтение: прогресс хранится в этом браузере';
-    } else if (standalone()) { img.hidden = true; t.textContent = 'Гость'; b.title = 'Прогресс хранится в этом браузере'; }
+    } else if (cloud.mode === 'local') { img.hidden = true; t.textContent = 'Гость'; b.title = 'Прогресс хранится в этом браузере'; }
     else { img.hidden = true; t.textContent = cloud.state === 'loading' ? '…' : 'Войти'; b.title = 'Вход и регистрация'; }
   }
-  function openAcct(first) {
+  function openAcct(first, tab) {
     const dlg = $('#acct'), box = $('#acctBox'); if (!dlg || !box) return;
+    if (cloud.mode === 'server') {
+      box.innerHTML = cloud.state === 'on' ? srvProfileHTML() : srvAuthHTML(tab || 'login');
+      if (cloud.state === 'on') { $('#acctName').textContent = cloud.acc.nick; $('#acctIni').textContent = cloud.acc.nick.slice(0, 1).toUpperCase(); }
+      dlg.hidden = false;
+      const inp = $('.acct-form .stu-inp', box); if (inp && cloud.state !== 'on') inp.focus();
+      return;
+    }
     const when = cloud.syncedAt ? new Date(cloud.syncedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
     if (cloud.state === 'on' || cloud.state === 'readonly') {
       box.innerHTML = `<p class="eyebrow">${first ? 'Регистрация ученика' : 'Профиль ученика'}</p>
@@ -253,12 +412,12 @@
 <p class="acct-note">${cloud.state === 'on' ? `Очки, пройденные уроки, экзамены и результаты IQ сохраняются в облаке и доступны на любом устройстве, где ты вошёл в этот аккаунт.${when ? ` Последняя синхронизация: ${when}.` : ''}` : 'У тебя доступ только на просмотр, поэтому прогресс хранится в этом браузере. Чтобы он сохранялся в облаке, владелец сайта должен выдать тебе права «Участник» (Contributor).'}</p>
 <div class="cta"><button type="button" class="btn btn-red" data-act="acctsave">${first ? 'Зарегистрироваться' : 'Сохранить'}</button><button type="button" class="btn" data-act="acctclose">Закрыть</button></div>`;
       $('#acctName').textContent = (cloud.me && cloud.me.name) || 'Ученик';
-    } else if (standalone()) {
-      // открыто вне Claude (например, на GitHub Pages): облачного входа здесь нет
-      box.innerHTML = `<p class="eyebrow">Вход и регистрация</p><h2 class="h2s">Здесь вход не нужен</h2>
-<p class="acct-note">Эта версия сайта работает без аккаунта: очки PP, пройденные уроки, экзамены и результаты IQ сохраняются в этом браузере. Если очистить данные сайта, прогресс пропадёт.</p>
-<p class="acct-note">Облачный вход, синхронизация между устройствами и общий рейтинг OAA работают в версии сайта на claude.ai.</p>
-<div class="cta"><button type="button" class="btn" data-act="acctclose">Понятно</button></div>`;
+    } else if (cloud.mode === 'local') {
+      // копия сайта без сервера (например, GitHub Pages): входа здесь нет
+      box.innerHTML = `<p class="eyebrow">Вход и регистрация</p><h2 class="h2s">Вход — на основном сайте</h2>
+<p class="acct-note">Эта копия сайта работает без аккаунта: очки PP, пройденные уроки, экзамены и результаты IQ сохраняются в этом браузере. Если очистить данные сайта, прогресс пропадёт.</p>
+<p class="acct-note">Регистрация, вход, сохранение прогресса в облаке и общий рейтинг OAA работают на основном сайте: <a href="${MAIN_SITE}">ayanokoji-tutor.vercel.app</a>.</p>
+<div class="cta"><a class="btn btn-red" href="${MAIN_SITE}">Открыть основной сайт</a><button type="button" class="btn" data-act="acctclose">Закрыть</button></div>`;
     } else {
       box.innerHTML = `<p class="eyebrow">Вход и регистрация</p><h2 class="h2s">Вход через аккаунт Claude</h2>
 <p class="acct-note">Отдельный логин и пароль не нужны: сайт узнаёт тебя по аккаунту Claude, в котором он открыт. ${cloud.state === 'loading' ? 'Сейчас проверяю аккаунт — подожди пару секунд.' : 'Сейчас аккаунт не определён: страница открыта без входа или вне Claude. Прогресс сохраняется только в этом браузере.'}</p>
@@ -768,7 +927,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     return `
 <section class="wrap prog">
   <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">Мой прогресс</span></nav>
-  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">Личное дело ученика</p><h1 class="h1">Мой прогресс</h1><p>Всё хранится только в этом браузере. Если очистить данные сайта, придётся начать с класса D.</p></header>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">Личное дело ученика</p><h1 class="h1">Мой прогресс</h1><p>${cloud.state === 'on' ? 'Прогресс сохраняется в твоём аккаунте и доступен на любом устройстве после входа.' : 'Всё хранится только в этом браузере. Если очистить данные сайта, придётся начать с класса D.'}</p></header>
   <div class="prog-grid">
     <div class="stu">
       <div class="stu-top"><span>高度育成高等学校</span><span>Ученик</span></div>
@@ -776,7 +935,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
       <label class="stu-name" for="stuName">Имя ученика</label>
       <input id="stuName" class="stu-inp" maxlength="40" placeholder="Впиши своё имя" value="${esc(st.name || '')}" autocomplete="off">
       <dl class="stu-dl"><div><dt>Очки</dt><dd>${fmtNum(st.pp)} PP</dd></div><div><dt>Уроков пройдено</dt><dd>${doneTotal} / ${TOTAL}</dd></div><div><dt>Верных ответов</dt><dd>${quizN}</dd></div><div><dt>Лучший IQ</dt><dd>${(st.iq && st.iq.best) || '—'}</dd></div><div><dt>Репетитор</dt><dd>${MODES[st.tutor].label}</dd></div><div><dt>Аккаунт</dt><dd>${cloud.state === 'on' ? 'в облаке' : cloud.state === 'readonly' ? 'только чтение' : cloud.state === 'loading' ? '…' : 'гость'}</dd></div></dl>
-      <button type="button" class="btn" data-act="acct">${cloud.state === 'on' || cloud.state === 'readonly' ? 'Профиль и ник' : standalone() ? 'Об аккаунте' : 'Войти / зарегистрироваться'}</button>
+      <button type="button" class="btn" data-act="acct">${cloud.state === 'on' || cloud.state === 'readonly' ? 'Профиль и ник' : cloud.mode === 'local' ? 'Об аккаунте' : 'Войти / зарегистрироваться'}</button>
       <div class="stu-next">${nextR ? `До класса ${nextR.r}: ${fmtNum(nextR.min - st.pp)} PP` : 'Это высший класс'}<span class="bar"><i style="width:${pct}%"></i></span></div>
       <p class="stu-note">${r.note}</p>
     </div>
@@ -793,8 +952,29 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     const inp = $('#stuName');
     if (inp) inp.addEventListener('input', () => { st.name = inp.value.slice(0, 40); save(); });
     const box = $('#lbList'); if (!box) return;
+    if (cloud.mode === 'server') {
+      const note = cloud.state === 'on' ? '' : '<p class="lb-empty">Чтобы попасть в рейтинг, <button type="button" class="linkbtn" data-act="acct">войди или зарегистрируйся</button>.</p>';
+      api('board').then(r => {
+        if (!document.body.contains(box)) return;
+        const rows = r.ok ? r.data.rows : null;
+        if (!rows) { box.innerHTML = '<p class="lb-empty">Рейтинг сейчас недоступен.</p>'; return; }
+        if (!rows.length) { box.innerHTML = '<p class="lb-empty">Пока в рейтинге никого. Пройди урок или реши задание IQ — и ты будешь первым.</p>' + note; return; }
+        box.innerHTML = rows.map((x, i) => {
+          const rk = /^[ABCD]$/.test(x.rank) ? x.rank : 'D';
+          return `<div class="lb-row${x.me ? ' me' : ''}"><span class="lb-n">${i + 1}</span><span class="lb-ini"></span><span class="lb-name"></span><span class="rk" data-r="${rk}">${rk}</span><span class="lb-pp">${fmtNum(Math.max(0, Math.round(+x.pp || 0)))} PP</span><span class="lb-iq">${+x.iq ? 'IQ ' + Math.round(+x.iq) : '—'}</span></div>`;
+        }).join('') + note;
+        $$('.lb-row', box).forEach((row, i) => {
+          const nick = String(rows[i].nick || 'Ученик');
+          $('.lb-name', row).textContent = nick + (rows[i].me ? ' · ты' : '');
+          $('.lb-ini', row).textContent = nick.slice(0, 1).toUpperCase();
+        });
+      }).catch(() => { if (document.body.contains(box)) box.innerHTML = '<p class="lb-empty">Рейтинг сейчас недоступен.</p>'; });
+      return;
+    }
     if (!cloud.db) {
-      box.innerHTML = `<p class="lb-empty">${cloud.state === 'loading' ? 'Проверяю аккаунт…' : standalone() ? 'Общий рейтинг работает в версии сайта на claude.ai. Здесь твой прогресс хранится в этом браузере.' : 'Рейтинг виден после входа: открой сайт, будучи в своём аккаунте Claude. Подробнее — кнопка «Войти» вверху.'}</p>`;
+      box.innerHTML = cloud.state === 'loading' ? '<p class="lb-empty">Проверяю аккаунт…</p>'
+        : cloud.mode === 'local' ? `<p class="lb-empty">Общий рейтинг и вход работают на основном сайте — <a href="${MAIN_SITE}">ayanokoji-tutor.vercel.app</a>. Здесь твой прогресс хранится в этом браузере.</p>`
+        : '<p class="lb-empty">Рейтинг виден после входа: открой сайт, будучи в своём аккаунте Claude. Подробнее — кнопка «Войти» вверху.</p>';
       return;
     }
     const unsub = cloud.db.collection('board').orderBy('pp', 'desc').limit(30).onSnapshot(async snap => {
@@ -950,6 +1130,13 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     tutor: el => setTutor(el.dataset.t),
     tutorcycle: () => setTutor(ORDER[(ORDER.indexOf(st.tutor) + 1) % ORDER.length]),
     acct: () => openAcct(false),
+    accttab: el => openAcct(false, el.dataset.tab),
+    srvlogout: async () => {
+      await pushServer();
+      try { await api('logout', {}); } catch (e) { /* выходим локально в любом случае */ }
+      closeAcct(); signedOut();
+      toast('Ты вышел из аккаунта', 'Прогресс сохранён в облаке. Войди снова, чтобы продолжить.', false, anyTutor());
+    },
     acctclose: () => closeAcct(),
     acctsave: () => {
       const inp = $('#nickIn');
@@ -981,6 +1168,10 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     reset2: () => { const keep = { name: st.name, tutor: st.tutor, nick: st.nick }; st = Object.assign(blank(), keep); save(); hud(); toast('Прогресс сброшен', 'Снова класс D. Иногда начать заново — это тоже ход.', false, 'a'); cur = { v: '' }; route(); }
   };
 
+  document.addEventListener('submit', e => {
+    const f = e.target.closest('form[data-form]');
+    if (f) { e.preventDefault(); acctSubmit(f); }
+  });
   document.addEventListener('click', e => {
     const to = e.target.closest('[data-to]');
     if (to) { e.preventDefault(); jump(to.dataset.to); return; }

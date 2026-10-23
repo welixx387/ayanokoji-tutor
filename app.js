@@ -789,16 +789,22 @@ ${window.IQ ? iqPromo() : ''}
   }
 
   /* ---------- голоса репетиторов (синтезатор речи браузера) ---------- */
-  // Голоса актёров озвучки взять нельзя, поэтому из голосов системы подбирается похожий тембр:
-  // Аянокоджи — мужской голос, ниже и неторопливее; Амасава — женский, выше и живее.
+  // Голоса актёров озвучки взять нельзя: это голоса реальных людей. Персонажей передаёт манера речи:
+  // Аянокоджи — мужской голос, низкий, медленный и ровный, с паузами между фразами и без восклицаний;
+  // Амасава — женский, высокий, быстрый и эмоциональный, восклицания и вопросы звучат выше.
   const CAN_SAY = 'speechSynthesis' in window;
-  const TV = { a: { g: 'm', pitch: 0.88, rate: 0.93 }, i: { g: 'f', pitch: 1.15, rate: 1.05 } };
+  const TV = {
+    a: { g: 'm', pitch: 0.8, rate: 0.9, gap: 450, best: /dmitry|pavel|yuri/i },
+    i: { g: 'f', pitch: 1.2, rate: 1.07, gap: 140, best: /dariya|svetlana|milena|irina/i }
+  };
+  // при смене значений по умолчанию старые сохранённые тон и скорость сбрасываются
+  const VOICE_VER = 2;
   // настройки голосов хранятся в этом браузере: набор голосов у каждого устройства свой
   const clampN = (x, lo, hi, d) => (typeof x === 'number' && isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d);
   const vset = (() => {
-    const s = store.get('voice', {}) || {};
-    const one = w => { const o = s[w] || {}; return { v: typeof o.v === 'string' ? o.v : '', pitch: clampN(o.pitch, 0.5, 1.6, TV[w].pitch), rate: clampN(o.rate, 0.6, 1.5, TV[w].rate) }; };
-    return { mode: ['auto', 'click', 'off'].includes(s.mode) ? s.mode : 'auto', a: one('a'), i: one('i') };
+    const s = store.get('voice', {}) || {}, old = s.ver !== VOICE_VER;
+    const one = w => { const o = s[w] || {}; return { v: typeof o.v === 'string' ? o.v : '', pitch: old ? TV[w].pitch : clampN(o.pitch, 0.5, 1.6, TV[w].pitch), rate: old ? TV[w].rate : clampN(o.rate, 0.6, 1.5, TV[w].rate) }; };
+    return { ver: VOICE_VER, mode: ['auto', 'click', 'off'].includes(s.mode) ? s.mode : 'auto', a: one('a'), i: one('i') };
   })();
   const saveV = () => { store.set('voice', vset); root.dataset.voice = vset.mode; };
   // «сами говорят»: только после первого действия пользователя, иначе браузер всё равно заблокирует звук
@@ -811,21 +817,28 @@ ${window.IQ ? iqPromo() : ''}
   const V_F = /\b(female|zira|hazel|susan|sonia|libby|maisie|kate|serena|jenny|aria|samantha|karen|moira|tessa|irina|svetlana|dariya|milena|katya|hedda|katja|amala|anna|petra|hortense|julie|denise|eloise|vivienne|amelie|audrey|paulina|zofia|zosia|ewa|huihui|yaoyao|xiaoxiao|xiaoyi|tingting|meijia|haruka|ayumi|sayaka|nanami|kyoko|mizuki)\b/i;
   const vGender = v => (V_M.test(v.name) ? 'm' : V_F.test(v.name) || /^google/i.test(v.name) ? 'f' : '');
   const normLang = x => String(x || '').replace('_', '-').toLowerCase();
+  // нейросетевые голоса (Edge, macOS, iOS) звучат почти как живые — им заметный приоритет
+  const NATURAL = /natural|neural|online|premium|enhanced/i;
   function pickVoice(lang, w) {
-    const code = lang.slice(0, 2).toLowerCase();
-    const score = v => { const g = vGender(v); return (g === TV[w].g ? 6 : g ? 0 : 3) + (normLang(v.lang) === lang.toLowerCase() ? 2 : 0) + (/natural|neural|online|premium|enhanced/i.test(v.name) ? 1 : 0); };
+    const code = lang.slice(0, 2).toLowerCase(), t = TV[w];
+    const score = v => { const g = vGender(v); return (g === t.g ? 8 : g ? 0 : 4) + (NATURAL.test(v.name) ? 3 : 0) + (normLang(v.lang) === lang.toLowerCase() ? 2 : 0) + (t.best.test(v.name) ? 1 : 0); };
     return speechSynthesis.getVoices().filter(v => normLang(v.lang).startsWith(code)).sort((x, y) => score(y) - score(x))[0] || null;
   }
-  function utter(text, lang, w) {
+  // русский голос можно выбрать вручную в настройках, остальные подбираются по полу персонажа
+  function voiceOf(lang, w) {
+    const p = vset[w], own = lang.startsWith('ru') && p.v ? speechSynthesis.getVoices().find(v => v.name === p.v) : null;
+    return { v: own || pickVoice(lang, w), own: !!own };
+  }
+  // mood — интонация фразы: «!» или «?» в конце реплики Амасавы
+  function utter(text, lang, w, mood) {
     const u = new SpeechSynthesisUtterance(text), p = vset[w];
-    // русский голос можно выбрать вручную в настройках, остальные подбираются по полу персонажа
-    const own = lang.startsWith('ru') && p.v ? speechSynthesis.getVoices().find(v => v.name === p.v) : null;
-    const v = own || pickVoice(lang, w), g = v ? vGender(v) : '';
+    const { v, own } = voiceOf(lang, w), g = v ? vGender(v) : '';
     u.lang = lang;
     if (v) u.voice = v;
     // если нужного по полу голоса в системе нет, тембр чужого сдвигаем сильнее
-    u.pitch = !own && g && g !== TV[w].g ? (w === 'a' ? Math.min(p.pitch, 0.7) : Math.max(p.pitch, 1.4)) : p.pitch;
-    u.rate = p.rate * (lang.startsWith('ru') ? 1 : 0.9);
+    const base = !own && g && g !== TV[w].g ? (w === 'a' ? Math.min(p.pitch, 0.7) : Math.max(p.pitch, 1.4)) : p.pitch;
+    u.pitch = Math.min(2, base + (mood === '!' ? 0.08 : mood === '?' ? 0.05 : 0));
+    u.rate = p.rate * (lang.startsWith('ru') ? 1 : 0.9) * (mood === '!' ? 1.04 : 1);
     return u;
   }
   // текст по кускам: русский и вставки на иностранных языках читаются голосами своих языков
@@ -859,6 +872,11 @@ ${window.IQ ? iqPromo() : ''}
     return out.filter(x => /[\p{L}\p{N}]/u.test(x.t)).map((x, k) => ({ t: x.t, lang: x.lang, w: p.w, on: k ? null : p.on }));
   }
   const cleanSay = t => t.replace(/[♡♥☆★✦]/g, '').replace(/\s*[→⟶]\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  // манера речи: сердечко у Амасавы — игривое восклицание и конец фразы; Аянокоджи голос не повышает
+  const manner = (t, w) => (w === 'a'
+    ? t.replace(/[♡♥]+/g, '.').replace(/!+/g, '.')
+    : t.replace(/([.!?…])?\s*[♡♥]+/g, (m, p) => (p || '!') + ' '));
+  const moodOf = (t, w) => (w !== 'i' ? '' : /!["»”)]*$/.test(t) ? '!' : /\?["»”)]*$/.test(t) ? '?' : '');
   // короткими фразами: длинные реплики Chrome иногда обрывает
   const sentences = t => (t.match(/[^.!?…。！？]+[.!?…。！？]*["»”)]*\s*|[.!?…。！？]+\s*/g) || [t]).map(x => x.trim()).filter(x => /[\p{L}\p{N}]/u.test(x));
   const voiceWarned = {};
@@ -877,9 +895,10 @@ ${window.IQ ? iqPromo() : ''}
       }
     });
   }
-  let sayTok = 0, sayEnd = null, sayKeep = [];
+  let sayTok = 0, sayEnd = null, sayKeep = [], sayTimer = 0;
   function stopSay() {
     sayTok++;
+    clearTimeout(sayTimer);
     if (CAN_SAY) speechSynthesis.cancel();
     const f = sayEnd; sayEnd = null; sayKeep = [];
     if (f) f();
@@ -889,18 +908,32 @@ ${window.IQ ? iqPromo() : ''}
     stopSay();
     if (!CAN_SAY) { toast('Озвучка недоступна', 'Этот браузер не умеет читать текст вслух.', false, 'i'); if (end) end(); return; }
     const list = [];
-    parts.flatMap(splitMixed).forEach(p => sentences(cleanSay(p.t)).forEach((t, k) => list.push({ t, lang: p.lang, w: p.w, on: k ? null : p.on })));
+    parts.flatMap(splitMixed).forEach(p => sentences(cleanSay(manner(p.t, p.w))).forEach((t, k) => list.push({ t, lang: p.lang, w: p.w, on: k ? null : p.on, mood: moodOf(t, p.w) })));
     if (!list.length) { if (end) end(); return; }
     warnVoices(list);
     const tok = sayTok;
     sayEnd = end || null;
-    list.forEach((p, k) => {
-      const u = utter(p.t, p.lang, p.w);
-      if (p.on) u.onstart = () => { if (tok === sayTok) p.on(); };
-      if (k === list.length - 1) u.onend = u.onerror = () => { if (tok === sayTok) { const f = sayEnd; sayEnd = null; sayKeep = []; if (f) f(); } };
-      sayKeep.push(u); // иначе Chrome может собрать реплику сборщиком мусора и не вызвать onend
+    let at = 0;
+    // фразы звучат по одной: между ними пауза в манере персонажа, при смене говорящего — чуть длиннее
+    const next = () => {
+      if (tok !== sayTok) return;
+      if (at >= list.length) { const f = sayEnd; sayEnd = null; sayKeep = []; if (f) f(); return; }
+      const p = list[at++], after = list[at], u = utter(p.t, p.lang, p.w, p.mood);
+      let done = false;
+      const go = () => {
+        if (done || tok !== sayTok) return;
+        done = true;
+        clearTimeout(sayTimer);
+        sayTimer = setTimeout(next, !after ? 0 : after.w !== p.w ? 500 : TV[p.w].gap);
+      };
+      u.onstart = () => { if (tok === sayTok && p.on) p.on(); };
+      u.onend = u.onerror = go;
+      sayKeep = [u]; // иначе Chrome может собрать реплику сборщиком мусора и не вызвать onend
       speechSynthesis.speak(u);
-    });
+      // страховка, если браузер не пришлёт onend: следующая фраза просто встанет в его очередь
+      sayTimer = setTimeout(go, 4000 + p.t.length * 170 / u.rate);
+    };
+    next();
   }
   // кто читает фразу: внутри заметки — её автор, иначе выбранный репетитор, в режиме «Вместе» — по очереди
   let duoTurn = 'i';
@@ -968,13 +1001,15 @@ ${window.IQ ? iqPromo() : ''}
   }
 
   /* ---------- окно настроек голосов ---------- */
-  const SAMPLE = { a: 'Я Аянокоджи. Объясняю спокойно и по делу — без лишних слов.', i: 'А я Амасава! Со мной учиться весело, сэмпай ♡' };
+  const SAMPLE = { a: 'Аянокоджи. Объясню один раз — спокойно и по существу. Остальное ты поймёшь сам.', i: 'А я Амасава! Учиться со мной весело, правда-правда. Ну что, начнём, сэмпай? ♡' };
   const VMODES = [['auto', 'Говорят сами', 'Репетиторы говорят сами, как только появляются их реплики: диалоги, результаты тестов, подсказки. Звук включится после первого нажатия на странице — так требуют браузеры.'], ['click', 'По кнопке', 'Реплики звучат только когда нажимаешь значок динамика рядом с ними.'], ['off', 'Без голоса', 'Кнопки озвучки скрыты. Фразы на иностранных языках по-прежнему можно послушать нажатием.']];
   const ruVoices = () => (CAN_SAY ? speechSynthesis.getVoices().filter(v => normLang(v.lang).startsWith('ru')) : []);
   function voiceRowHTML(w) {
     const p = vset[w], gname = g => (g === 'm' ? ' · мужской' : g === 'f' ? ' · женский' : '');
     const opts = ruVoices().map(v => `<option value="${esc(v.name)}"${v.name === p.v ? ' selected' : ''}>${esc(v.name)}${gname(vGender(v))}</option>`).join('');
+    const now = voiceOf(VOICE.ru, w).v;
     return `<fieldset class="vrow ${w}"><legend><img src="${T[w].face}" alt="" width="28" height="28">${T[w].name}</legend>
+<p class="vnow">${now ? `Сейчас звучит: <b>${esc(now.name)}</b>${NATURAL.test(now.name) ? ' · естественный голос' : ''}` : 'Голос выберет браузер'}</p>
 <label class="vfield"><span>Голос</span><select data-vw="${w}" data-vk="v"><option value="">Подобрать автоматически (${w === 'a' ? 'мужской' : 'женский'})</option>${opts}</select></label>
 <label class="vfield"><span>Тон <output>${p.pitch.toFixed(2)}</output></span><input type="range" min="0.5" max="1.6" step="0.05" value="${p.pitch}" data-vw="${w}" data-vk="pitch"></label>
 <label class="vfield"><span>Скорость <output>${p.rate.toFixed(2)}</output></span><input type="range" min="0.6" max="1.5" step="0.05" value="${p.rate}" data-vw="${w}" data-vk="rate"></label>
@@ -987,7 +1022,8 @@ ${window.IQ ? iqPromo() : ''}
 <p class="acct-note" id="vmodeNote">${mode[2]}</p>
 ${CAN_SAY ? voiceRowHTML('a') + voiceRowHTML('i') : '<p class="acct-err">Этот браузер не умеет читать текст вслух.</p>'}
 ${CAN_SAY && !ruVoices().length ? '<p class="acct-note">На этом устройстве не найдено русских голосов, поэтому браузер выберет голос сам. Добавь русский языковой пакет с речью в настройках системы или открой сайт в Microsoft Edge.</p>' : ''}
-<p class="acct-note vfine">Голоса — это синтезатор речи твоего устройства: для Аянокоджи подбирается мужской голос, ниже и спокойнее, для Амасавы — женский, выше и живее. Подстрой тон и скорость под то, как ты их слышишь. Настоящие голоса актёров озвучки сайт не использует: это голоса реальных людей, и копировать их без разрешения нельзя.</p>
+${CAN_SAY && ruVoices().length && !ruVoices().some(v => NATURAL.test(v.name)) ? '<p class="acct-note vtip">Сейчас на устройстве только стандартные голоса системы — они звучат механически. Живее всего репетиторы звучат в Microsoft Edge: там есть нейросетевые голоса Dmitry для Аянокоджи и Svetlana для Амасавы, сайт включит их сам.</p>' : ''}
+<p class="acct-note vfine">Голоса — это синтезатор речи твоего устройства, а характер передаёт манера: Аянокоджи говорит низко, медленно и ровно, делает паузы и никогда не повышает голос; Амасава — высоко, быстро и эмоционально. Тон и скорость можно подстроить под то, как ты их слышишь. Настоящие голоса актёров озвучки сайт не использует: это голоса реальных людей, и копировать их без разрешения нельзя.</p>
 <div class="cta"><button type="button" class="btn btn-red" data-act="vclose">Готово</button><button type="button" class="btn" data-act="vreset">Сбросить</button></div>`;
   }
   function openVoices() {

@@ -6,6 +6,16 @@
   const LESSONS = window.LESSONS;
   const byId = Object.fromEntries(SUBJ.map(s => [s.id, s]));
   const TOTAL = SUBJ.reduce((a, s) => a + s.lessons.length, 0);
+  // школьные предметы и разделы «Иностранные языки» (уровни CEFR) и «Программирование» (Основы и Junior)
+  const SCHOOL = SUBJ.filter(s => !s.section);
+  const LANGS = SUBJ.filter(s => s.section === 'lang');
+  const PROGS = SUBJ.filter(s => s.section === 'prog');
+  const sumL = list => list.reduce((a, s) => a + s.lessons.length, 0);
+  const SCHOOL_TOTAL = sumL(SCHOOL), LANG_TOTAL = sumL(LANGS), PROG_TOTAL = sumL(PROGS);
+  const gradeLabel = (s, g) => (s.section === 'lang' ? `уровень ${g}` : s.section === 'prog' ? g : `${g} класс`);
+  const gradeWord = s => (s.section === 'lang' ? 'уровень' : s.section === 'prog' ? '' : 'класс');
+  const SECTION_LINK = { lang: '<a href="#lang">Языки</a><span>/</span>', prog: '<a href="#prog">Программирование</a><span>/</span>' };
+  const crumbRoot = s => `<a href="#home">Предметы</a><span>/</span>${(s && SECTION_LINK[s.section]) || ''}`;
   const root = document.documentElement;
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -57,7 +67,7 @@
   };
   const facesHTML = m => `<span class="tfaces" aria-hidden="true">${(m === 'duo' ? ['a', 'i'] : [m]).map(w => `<img class="${w}" src="${T[w].face}" alt="" width="28" height="28">`).join('')}</span>`;
   const tmodeHTML = () => `<div class="tmode" role="radiogroup" aria-label="Кто объясняет">${ORDER.map(m => `<button type="button" role="radio" aria-checked="${st.tutor === m}" data-act="tutor" data-t="${m}">${facesHTML(m)}<span class="tn">${MODES[m].label}</span></button>`).join('')}</div>`;
-  const sayHTML = src => speakers(src).map(w => `<p class="say ${w}"><img src="${T[w].face}" alt="${T[w].short}" width="30" height="30"><span>${src[w]}</span></p>`).join('');
+  const sayHTML = src => speakers(src).map(w => `<p class="say ${w}"><img src="${T[w].face}" alt="${T[w].short}" width="30" height="30"><span>${src[w]}</span>${CAN_SAY ? `<button type="button" class="say-btn" data-act="saysay" aria-label="Послушать: говорит ${T[w].short}">${SPK}</button>` : ''}</p>`).join('');
 
   const RANKS = [
     { r: 'D', min: 0, title: 'Класс D', note: 'Отправная точка. Здесь начинают все — даже те, кто делает вид, что нет.' },
@@ -133,6 +143,8 @@
     t.innerHTML = `${who ? `<img src="${T[who].face}" alt="" width="38" height="38">` : ''}<b>${esc(title)}</b>${text ? `<span>${esc(text)}</span>` : ''}`;
     box.appendChild(t);
     setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 380); }, big ? 4600 : 2600);
+    // важные сообщения (новый класс, конец урока) репетитор произносит сам
+    if (big && who && canAuto()) sayLine(who, text ? `${title}. ${text}` : title);
   }
   const anyTutor = () => (st.tutor === 'duo' ? pick(['a', 'i']) : st.tutor);
   function addPP(n, why) {
@@ -456,9 +468,46 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   const loadAll = sid => Promise.all(byId[sid].lessons.map((_, i) => loadLesson(sid, i + 1)));
 
   /* ---------- разметка формул: [[a|b]] — дробь, √[x] — корень, ^2 ^(..) _1 _(..) — индексы ---------- */
+  /* ---------- блоки кода: подсветка синтаксиса ---------- */
+  // <pre class="code" data-lang="c">…</pre> в уроке пишется как есть, без HTML-экранирования
+  const escH = x => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const CODE_LABEL = { c: 'C', cpp: 'C++', rust: 'Rust', py: 'Python', sh: 'Терминал', asm: 'NASM · x86-64', txt: 'Вывод', make: 'Makefile', cmake: 'CMake', toml: 'TOML' };
+  const C_KW = 'auto break case char const continue default do double else enum extern float for goto if inline int long return short signed sizeof static struct switch typedef union unsigned void volatile while bool true false NULL size_t ssize_t pid_t off_t uint8_t uint16_t uint32_t uint64_t int8_t int16_t int32_t int64_t FILE';
+  const NUM = String.raw`\b(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?)\b`;
+  const HL_SRC = {
+    c: { c: String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, p: String.raw`^[ \t]*#[^\n]*`, s: String.raw`"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])+'`, k: C_KW },
+    rust: { c: String.raw`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, p: String.raw`#!?\[[^\]\n]*\]|\b[a-z_]\w*!`, s: String.raw`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\\n])'`, k: 'as break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 bool char str String Vec Option Some None Result Ok Err Box Rc Arc HashMap' },
+    py: { c: '#[^\\n]*', p: String.raw`^[ \t]*@[\w.]+`, s: String.raw`[fbr]?"{3}[\s\S]*?"{3}|[fbr]?'{3}[\s\S]*?'{3}|[fbr]?"(?:\\.|[^"\\\n])*"|[fbr]?'(?:\\.|[^'\\\n])*'`, k: 'and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield self' },
+    sh: { c: String.raw`(?:^|[ \t])#[^\n]*`, p: String.raw`\$\w+|\$[?#@*]|^\$ `, s: String.raw`"(?:\\.|[^"\\])*"|'[^']*'`, k: 'if then else elif fi for in do done while until case esac function return export local' },
+    asm: { c: ';[^\\n]*', p: String.raw`^[ \t]*[.\w]+:|\b(?:section|global|extern|db|dw|dd|dq|resb|resw|resd|resq|equ|default)\b`, s: String.raw`"[^"\n]*"|'[^'\n]*'`, k: 'mov movzx movsx movsxd lea add sub inc dec mul imul div idiv neg cmp test jmp je jne jz jnz jg jge jl jle ja jae jb jbe js jns call ret push pop syscall and or xor not shl shr sar rol ror nop leave cqo cdq rep movsb stosb lodsb loop rax rbx rcx rdx rsi rdi rbp rsp rip r8 r9 r10 r11 r12 r13 r14 r15 eax ebx ecx edx esi edi ebp esp r8d r9d ax bx cx dx al bl cl dl ah byte word dword qword rel' },
+    make: { c: '#[^\\n]*', p: String.raw`^[\w.%/-]+:|\$[@<^]|\$\([\w]+\)`, s: String.raw`"[^"\n]*"`, k: '.PHONY' },
+    cmake: { c: '#[^\\n]*', p: String.raw`\b[a-z_]+(?=\()`, s: String.raw`"(?:\\.|[^"\\])*"`, k: 'PUBLIC PRIVATE INTERFACE VERSION LANGUAGES CXX REQUIRED STATIC SHARED COMMAND NAME ON OFF' },
+    toml: { c: '#[^\\n]*', p: String.raw`^[ \t]*\[[^\]\n]*\]`, s: String.raw`"(?:\\.|[^"\\\n])*"`, k: 'true false' }
+  };
+  HL_SRC.cpp = Object.assign({}, HL_SRC.c, { k: C_KW + ' class namespace template typename public private protected virtual override new delete this using try catch throw nullptr constexpr noexcept operator friend explicit mutable final std string vector map unordered_map set array pair unique_ptr shared_ptr weak_ptr make_unique make_shared move cout cin cerr endl' });
+  const HL = {};
+  Object.keys(HL_SRC).forEach(k => {
+    const d = HL_SRC[k], kw = `(?<![\\w.])(?:${d.k.trim().split(/\s+/).map(w => w.replace(/[.]/g, '\\.')).join('|')})\\b`;
+    HL[k] = new RegExp(`(${d.c})|(${d.p})|(${d.s})|(${kw})|(${NUM})`, 'gm');
+  });
+  function hlCode(code, lang) {
+    const re = HL[lang];
+    if (!re) return escH(code);
+    let out = '', at = 0;
+    for (const m of code.matchAll(re)) {
+      if (!m[0]) continue;
+      const cls = m[1] != null ? 'c' : m[2] != null ? 'p' : m[3] != null ? 's' : m[4] != null ? 'k' : 'n';
+      out += escH(code.slice(at, m.index)) + `<span class="t-${cls}">${escH(m[0])}</span>`;
+      at = m.index + m[0].length;
+    }
+    return out + escH(code.slice(at));
+  }
+  const codeBlocks = html => html.replace(/<pre class="code"(?: data-lang="([\w+-]+)")?>\n?([\s\S]*?)<\/pre>/g, (m, lang, body) =>
+    `<pre class="code"${lang ? ` data-lang="${lang}" data-label="${CODE_LABEL[lang] || lang}"` : ''}><code>${hlCode(body.replace(/\s+$/, ''), lang)}</code></pre>`);
+
   function fmt(html) {
     if (!html) return '';
-    return String(html).split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/).map((part, i) => {
+    return codeBlocks(String(html)).split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/).map((part, i) => {
       if (i % 2) return part;
       // корни и дроби могут быть вложены друг в друга — раскрываем изнутри наружу
       for (let k = 0; k < 4; k++) {
@@ -488,15 +537,18 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
     const duo = who.length > 1;
     const ava = (w, on) => `<figure class="vn-ava ${w}${on ? ' on' : ''}" data-n="${T[w].short}"><img src="${T[w].bust}" alt="${T[w].name}" width="360" height="360" loading="lazy"></figure>`;
     const lines = who.map(w => `<div class="vn-line ${w}"><span class="vn-name"><img class="vn-mini" src="${T[w].face}" alt="" width="22" height="22">${duo ? T[w].short : T[w].name}</span><p class="vn-text">${esc(src[w])}</p></div>`).join('');
-    return `<div class="vn${duo ? ' duo' : ''}" data-act="vnskip">${ava(who[0], true)}<div class="vn-box">${lines}<button type="button" class="vn-skip" aria-label="Показать текст целиком">▼</button></div>${duo ? ava(who[1]) : ''}</div>`;
+    const voice = CAN_SAY ? `<button type="button" class="vn-voice" data-act="vnvoice" aria-pressed="false">${SPK}<span>${duo ? 'Послушать их' : 'Послушать'}</span></button>` : '';
+    return `<div class="vn${duo ? ' duo' : ''}" data-act="vnskip">${ava(who[0], true)}<div class="vn-box">${lines}${voice}<button type="button" class="vn-skip" aria-label="Показать текст целиком">▼</button></div>${duo ? ava(who[1]) : ''}</div>`;
   }
   function refreshVN() {
-    $$('.vnw[data-vid]').forEach(w => { const src = VN[+w.dataset.vid]; if (src) { w.innerHTML = vnInner(src); typeVN(w); } });
+    $$('.vnw[data-vid]').forEach(w => { const src = VN[+w.dataset.vid]; if (src) { w.innerHTML = vnInner(src); typeVN(w, false); } });
   }
-  function typeVN(scope = document) {
+  function typeVN(scope = document, auto = true) {
+    const fresh = [];
     $$('.vn', scope).forEach(vn => {
       if (vn.dataset.typed) return;
       vn.dataset.typed = '1';
+      fresh.push(vn);
       const ps = $$('.vn-text', vn), avas = $$('.vn-ava', vn), lines = $$('.vn-line', vn);
       if (reduce() || !ps.length) { vn.classList.add('done'); return; }
       const full = ps.map(p => p.textContent);
@@ -525,6 +577,11 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
       vn._finish = finish;
       onCleanup(() => clearTimeout(tid));
     });
+    // «Говорят сами»: звучит первый появившийся диалог (он всегда в начале страницы или только что открылся)
+    if (auto && canAuto() && fresh.length) {
+      const b = $('.vn-voice', fresh[0]);
+      if (b) sayVN(b, true);
+    }
   }
 
   /* ---------- куски разметки главной ---------- */
@@ -577,14 +634,14 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   <div class="hero-txt">
     <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Кодо Икусэй · 8–11 класс · все предметы</p>
     <h1 class="hero-h"><span class="ln"><span>Репетитор</span></span><span class="ln"><span class="red">Аянокоджи</span></span><span class="ln sm"><span class="pink">и Амасава Ичика</span></span></h1>
-    <p class="hero-sub">${SUBJ.length} школьных предметов и ${TOTAL} подробных уроков по 30–40 минут: теория, разборы, ловушки, практика с решениями и тест. Аянокоджи объясняет спокойно и по шагам, Амасава — живо и с подсказками для запоминания. Выбери одного или учись с обоими.</p>
-    <blockquote class="hero-q"><span id="heroQ">${QUOTES[0]}</span><span class="caret" aria-hidden="true"></span></blockquote>
+    <p class="hero-sub">${SCHOOL.length} школьных предметов, ${LANGS.length} иностранных языков от A2 до C1, ${PROGS.length} курсов программирования до уровня Junior и ${TOTAL} подробных уроков по 30–40 минут: теория, разборы, ловушки, практика с решениями и тест. Аянокоджи объясняет спокойно и по шагам, Амасава — живо и с подсказками для запоминания. Выбери одного или учись с обоими.</p>
+    <blockquote class="hero-q"><span id="heroQ">${QUOTES[0]}</span><span class="caret" aria-hidden="true"></span>${CAN_SAY ? `<button type="button" class="q-say" data-act="heroq" aria-label="Послушать: говорит Аянокоджи">${SPK}</button>` : ''}</blockquote>
     <div class="cta">
       <button type="button" class="btn btn-red" data-to="subjects">Выбрать предмет <span aria-hidden="true">→</span></button>
       ${last ? `<a class="btn" href="#l-${last.sid}-${last.n}">Продолжить: ${esc(byId[last.sid].name)}, урок ${last.n}</a>` : '<button type="button" class="btn" data-to="tutors">Выбрать репетитора</button>'}
     </div>
     <dl class="stats">
-      <div><dt>Предметов</dt><dd>${SUBJ.length}</dd></div>
+      <div><dt>Курсов</dt><dd>${SUBJ.length}</dd></div>
       <div><dt>Уроков</dt><dd>${TOTAL}</dd></div>
       <div><dt>Часов занятий</dt><dd>≈${Math.round(TOTAL * 35 / 60)}</dd></div>
       <div><dt>Пройдено тобой</dt><dd>${doneTotal}</dd></div>
@@ -604,8 +661,10 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
 </section>
 <section class="wrap sec" id="subjects" style="scroll-margin-top:calc(var(--head) + 8px)">
   <header class="sec-h"><p class="eyebrow">OAA · раздел 1 · академические способности</p><h2>Выбери предмет</h2><p>Курсы идут от 8 к 11 классу. Начать можно с любого урока, но если тема даётся тяжело — вернись на пару уроков назад. Пробелы в основании видны сразу.</p></header>
-  <div class="grid-subj">${SUBJ.map(cardSubj).join('')}</div>
+  <div class="grid-subj">${SCHOOL.map(cardSubj).join('')}</div>
 </section>
+${LANGS.length ? langPromo() : ''}
+${PROGS.length ? progPromo() : ''}
 ${window.IQ ? iqPromo() : ''}
 <section class="wrap sec">
   <header class="sec-h"><p class="eyebrow">Испанская партия · 6 ходов</p><h2>Как устроен каждый урок</h2><p>Шесть ходов дебюта — шесть шагов урока. Порядок не случаен: каждый следующий опирается на предыдущий. Доска справа разыгрывает эти ходы.</p></header>
@@ -627,7 +686,7 @@ ${window.IQ ? iqPromo() : ''}
     return `<section class="wrap sec" id="iqsec">
   <div class="iq-promo">
     <div class="iq-promo-t">
-      <p class="eyebrow">OAA · раздел 2 · интеллект</p>
+      <p class="eyebrow">OAA · раздел 4 · интеллект</p>
       <h2>IQ-тренажёр</h2>
       <p>Бесконечные задания восьми типов: числовые и буквенные ряды, матрицы фигур, логические цепочки, повороты узоров. Пять уровней сложности — от «Класса D» до «Белой комнаты». Каждое задание собирается заново и получает свой номер: того, что ты уже решал, генератор не выдаст повторно.</p>
       <ul class="iq-promo-l">${window.IQ.LEVELS.map(l => `<li><b>${l.n}</b>${l.name}</li>`).join('')}</ul>
@@ -636,6 +695,345 @@ ${window.IQ ? iqPromo() : ''}
     <div class="iq-promo-art" aria-hidden="true">${sample ? sample.q.replace(/<p[^>]*>[\s\S]*?<\/p>/, '') : ''}<span class="iq-promo-id">№ ${sample ? sample.id : ''}</span></div>
   </div>
 </section>`;
+  }
+
+  /* ---------- раздел «Программирование» ---------- */
+  function progPromo() {
+    return `<section class="wrap sec" id="progsec" style="scroll-margin-top:calc(var(--head) + 8px)">
+  <header class="sec-h"><p class="eyebrow">OAA · раздел 3 · программирование</p><h2>Программирование: до уровня Junior</h2><p>${PROGS.length} курсов по ${Math.round(PROG_TOTAL / PROGS.length)} уроков: Linux, основы системного программирования, C, C++, Rust, Python и ассемблер. Код с подсветкой, задачи с решениями и подготовка к собеседованию на позицию Junior.</p></header>
+  <div class="grid-subj">${PROGS.map(cardSubj).join('')}</div>
+  <div class="cta" style="margin-top:28px"><a class="btn btn-red" href="#prog">Открыть раздел программирования <span aria-hidden="true">→</span></a></div>
+</section>`;
+  }
+  // рекомендуемый маршрут: от среды и первого языка к системному уровню
+  const PROG_PATH = [
+    ['linux', 'Среда', 'Терминал, файлы, права, процессы и Bash. Всё остальное ты будешь запускать здесь.'],
+    ['python', 'Первый язык', 'Быстрый старт: алгоритмы, структуры данных, автоматизация рутины.'],
+    ['clang', 'Фундамент', 'Память, указатели и то, как программа на самом деле работает с железом.'],
+    ['asm', 'Под капотом', 'Регистры, стек и системные вызовы: что получается из твоего кода на C.'],
+    ['sysprog', 'Система', 'Процессы, файлы, потоки, сигналы и сокеты — программы, которые работают с ядром.'],
+    ['cpp', 'Индустрия', 'Классы, RAII, шаблоны и STL — язык игр, браузеров и высоконагруженных систем.'],
+    ['rust', 'Безопасность', 'Владение и заимствование: системный язык, где ошибки памяти ловит компилятор.']
+  ];
+  function vProg() {
+    return `
+<section class="wrap lang-page prog-page">
+  <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">Программирование</span></nav>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 3</p><h1 class="h1">Программирование</h1><p>${PROGS.length} курсов — от первой команды в терминале до уровня Junior: ${Math.round(PROG_TOTAL / PROGS.length)} уроков в каждом, восемь на основы и восемь на уровень Junior, а в конце — специальный экзамен.</p></header>
+  ${vnHTML({ a: 'Программирование учат руками, а не глазами. В каждом уроке есть код — не копируй его, а набирай сам, запускай, ломай и чини. Ошибка компилятора — не провал, а подсказка. Через месяц ты начнёшь понимать её с первого взгляда.', i: 'Сэмпай, я составила маршрут ♡ Начни с Linux и Python, потом C — и тогда ассемблер, системное программирование, C++ и Rust покажутся логичными, а не страшными. Код в уроках можно скопировать кнопкой в углу блока!' })}
+  <ol class="prog-path">${PROG_PATH.filter(([id]) => byId[id]).map(([id, step, what], k) => `<li><a href="#s-${id}" class="hue" style="--h:${byId[id].hue}"><span class="pp-n">${k + 1}</span><span class="pp-t"><small>${step}</small><b>${byId[id].name}</b><span>${what}</span></span></a></li>`).join('')}</ol>
+  <div class="grid-subj">${PROGS.map(cardSubj).join('')}</div>
+  <section class="sec">
+    <header class="sec-h"><p class="eyebrow">Честно о целях</p><h2>Что значит «уровень Junior»</h2></header>
+    <div class="content lang-how">
+      <p>Junior — это не «знаю синтаксис», а «могу самостоятельно решить небольшую задачу в команде»: прочитать чужой код, найти ошибку, написать функцию с тестами и объяснить, почему она работает. Курсы дают фундамент и честную карту: что спрашивают на собеседованиях и что нужно уметь руками.</p>
+      <ol>
+        <li><b>Нужен компьютер с Linux.</b> Подойдут WSL на Windows, виртуальная машина или отдельный раздел. Все примеры рассчитаны на Linux и компиляторы gcc, g++, rustc и Python 3.</li>
+        <li><b>Код — каждый день.</b> Лучше 30 минут ежедневно, чем пять часов раз в неделю. Набирай примеры сам и меняй их.</li>
+        <li><b>Проекты важнее уроков.</b> В конце каждого курса есть мини-проект. Положи его на GitHub — это твоё портфолио.</li>
+        <li><b>Читай чужой код и документацию.</b> man-страницы, cppreference, The Rust Book, docs.python.org — первоисточники лучше пересказов.</li>
+        <li><b>Проверяй себя.</b> Контрольная точка после основ, вопросы собеседования в последнем уроке и специальный экзамен в конце курса.</li>
+      </ol>
+      <p class="fine">Обычно на путь до первой работы Junior уходит от полугода до года регулярной практики. Курсы — это карта и ядро знаний; уровень создают часы написанного кода и законченные проекты.</p>
+    </div>
+  </section>
+</section>`;
+  }
+
+  /* ---------- раздел «Иностранные языки» ---------- */
+  function langPromo() {
+    return `<section class="wrap sec" id="langsec" style="scroll-margin-top:calc(var(--head) + 8px)">
+  <header class="sec-h"><p class="eyebrow">OAA · раздел 2 · иностранные языки</p><h2>Иностранные языки: от A2 до C1</h2><p>${LANGS.length} углублённых курсов по ${Math.round(LANG_TOTAL / LANGS.length)} уроков: грамматика уровней B1, B2 и C1, лексика, стратегии экзаменов. Объясняют те же репетиторы, а фразы на иностранном языке можно прослушать.</p></header>
+  <div class="grid-subj">${LANGS.map(cardSubj).join('')}</div>
+  <div class="cta" style="margin-top:28px"><a class="btn btn-red" href="#lang">Открыть раздел языков <span aria-hidden="true">→</span></a></div>
+</section>`;
+  }
+  const CEFR = [
+    ['A2', 'Старт курса', 'Понимаешь простые фразы о себе, семье, покупках и учёбе, можешь коротко поговорить на знакомую тему и заполнить анкету.'],
+    ['B1', 'Пороговый', 'Понимаешь главное в ясной речи и текстах на знакомые темы, справляешься в поездке, рассказываешь о событиях и планах и объясняешь своё мнение.'],
+    ['B2', 'Продвинутый', 'Понимаешь сложные тексты и новости, говоришь спонтанно и бегло, споришь и аргументируешь, пишешь подробный связный текст.'],
+    ['C1', 'Профессиональный', 'Понимаешь длинные сложные тексты и скрытые смыслы, говоришь свободно, не подбирая слов, и гибко пользуешься языком в учёбе и работе.']
+  ];
+  const EXAMS = [
+    ['Английский', 'Cambridge B1 Preliminary, IELTS 4–5', 'B2 First, IELTS 5,5–6,5', 'C1 Advanced, IELTS 7–8'],
+    ['Немецкий', 'Goethe-Zertifikat B1', 'Goethe-Zertifikat B2, telc B2', 'Goethe-Zertifikat C1, TestDaF'],
+    ['Французский', 'DELF B1', 'DELF B2', 'DALF C1'],
+    ['Польский', 'Certyfikat B1', 'Certyfikat B2', 'Certyfikat C1'],
+    ['Китайский', '≈ HSK 4', '≈ HSK 5', '≈ HSK 6'],
+    ['Японский', '≈ JLPT N3', '≈ JLPT N2', '≈ JLPT N1']
+  ];
+  function vLang() {
+    return `
+<section class="wrap lang-page">
+  <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">Иностранные языки</span></nav>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 2</p><h1 class="h1">Иностранные языки</h1><p>${LANGS.length} углублённых курсов — английский, немецкий, французский, польский, китайский и японский. Каждый ведёт от уверенного A2 к C1: ${Math.round(LANG_TOTAL / LANGS.length)} уроков, по восемь на уровни B1, B2 и C1, и специальный экзамен в конце.</p></header>
+  ${vnHTML({ a: 'Язык не учат темами, его учат уровнями. На каждом уровне меняется не столько словарь, сколько то, что ты умеешь делать: на B1 — рассказывать, на B2 — спорить, на C1 — выбирать точное слово под ситуацию. Курс показывает, что нужно на каждом шаге. Но часы практики за тебя не проведёт никто.', i: 'Сэмпай, выбирай язык по сердцу, а не по моде ♡ Кстати, все фразы с пунктирным подчёркиванием можно послушать — нажми, и браузер прочитает их вслух. Подражай произношению, это лучше любой транскрипции!' })}
+  <div class="cefr">${CEFR.map(([lv, name, can]) => `<div class="cefr-c"><b>${lv}</b><span>${name}</span><p>${can}</p></div>`).join('')}</div>
+  <div class="grid-subj">${LANGS.map(cardSubj).join('')}</div>
+  <section class="sec">
+    <header class="sec-h"><p class="eyebrow">Честно о сроках</p><h2>Как на самом деле дойти до C1</h2></header>
+    <div class="content lang-how">
+      <p>Для европейских языков путь от A2 до C1 обычно занимает 500–700 часов занятий, для китайского и японского — в два-три раза больше. Курс даёт карту и ядро: грамматику каждого уровня, ключевую лексику, типичные ошибки и стратегии экзаменов. Остальные часы — это практика, и без неё уровень не растёт.</p>
+      <ol>
+        <li><b>Один урок — один-два дня.</b> Прочитай теорию, прослушай примеры, реши практику, пройди тест.</li>
+        <li><b>Каждый день 20–30 минут ввода:</b> подкасты, видео, адаптированные книги на своём уровне. Понимать должно быть почти всё — тогда язык усваивается.</li>
+        <li><b>Говори и пиши с первого дня.</b> Пересказывай примеры урока своими словами, веди короткий дневник, найди собеседника.</li>
+        <li><b>Повторяй слова интервально</b> — через день, неделю, месяц. Карточки работают лучше списков.</li>
+        <li><b>Проверяй себя экзаменом.</b> В конце каждого уровня есть контрольная точка, а в конце курса — специальный экзамен.</li>
+      </ol>
+    </div>
+    <div class="tbl"><table><thead><tr><th>Язык</th><th>B1</th><th>B2</th><th>C1</th></tr></thead><tbody>${EXAMS.map(r => `<tr><td><b>${r[0]}</b></td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td></tr>`).join('')}</tbody></table></div>
+    <p class="fine">Соответствие HSK и JLPT уровням CEFR приблизительное. Озвучка работает через синтезатор речи браузера: Аянокоджи говорит мужским голосом, Амасава — женским. Если для языка нет голоса, установи его в настройках системы (языковой пакет). Больше всего естественных голосов в Microsoft Edge.</p>
+  </section>
+</section>`;
+  }
+
+  /* ---------- голоса репетиторов (синтезатор речи браузера) ---------- */
+  // Голоса актёров озвучки взять нельзя, поэтому из голосов системы подбирается похожий тембр:
+  // Аянокоджи — мужской голос, ниже и неторопливее; Амасава — женский, выше и живее.
+  const CAN_SAY = 'speechSynthesis' in window;
+  const TV = { a: { g: 'm', pitch: 0.88, rate: 0.93 }, i: { g: 'f', pitch: 1.15, rate: 1.05 } };
+  // настройки голосов хранятся в этом браузере: набор голосов у каждого устройства свой
+  const clampN = (x, lo, hi, d) => (typeof x === 'number' && isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d);
+  const vset = (() => {
+    const s = store.get('voice', {}) || {};
+    const one = w => { const o = s[w] || {}; return { v: typeof o.v === 'string' ? o.v : '', pitch: clampN(o.pitch, 0.5, 1.6, TV[w].pitch), rate: clampN(o.rate, 0.6, 1.5, TV[w].rate) }; };
+    return { mode: ['auto', 'click', 'off'].includes(s.mode) ? s.mode : 'auto', a: one('a'), i: one('i') };
+  })();
+  const saveV = () => { store.set('voice', vset); root.dataset.voice = vset.mode; };
+  // «сами говорят»: только после первого действия пользователя, иначе браузер всё равно заблокирует звук
+  const canAuto = () => CAN_SAY && vset.mode === 'auto' && !(navigator.userActivation && !navigator.userActivation.hasBeenActive);
+  const VOICE = { ru: 'ru-RU', en: 'en-GB', de: 'de-DE', fr: 'fr-FR', pl: 'pl-PL', zh: 'zh-CN', ja: 'ja-JP' };
+  const LANG_IN = { ru: 'русском', en: 'английском', de: 'немецком', fr: 'французском', pl: 'польском', zh: 'китайском', ja: 'японском' };
+  const SPK = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  // браузеры не сообщают пол голоса — узнаём его по имени (Windows, Edge, Chrome, macOS, iOS)
+  const V_M = /\b(male|david|mark|george|james|guy|ryan|thomas|daniel|alex|fred|oliver|arthur|aaron|pavel|dmitry|yuri|maxim|stefan|conrad|killian|markus|paul|henri|remy|adam|marek|kangkang|yunxi|yunjian|yunyang|yunhao|ichiro|keita|otoya|hattori|daichi|naoki)\b/i;
+  const V_F = /\b(female|zira|hazel|susan|sonia|libby|maisie|kate|serena|jenny|aria|samantha|karen|moira|tessa|irina|svetlana|dariya|milena|katya|hedda|katja|amala|anna|petra|hortense|julie|denise|eloise|vivienne|amelie|audrey|paulina|zofia|zosia|ewa|huihui|yaoyao|xiaoxiao|xiaoyi|tingting|meijia|haruka|ayumi|sayaka|nanami|kyoko|mizuki)\b/i;
+  const vGender = v => (V_M.test(v.name) ? 'm' : V_F.test(v.name) || /^google/i.test(v.name) ? 'f' : '');
+  const normLang = x => String(x || '').replace('_', '-').toLowerCase();
+  function pickVoice(lang, w) {
+    const code = lang.slice(0, 2).toLowerCase();
+    const score = v => { const g = vGender(v); return (g === TV[w].g ? 6 : g ? 0 : 3) + (normLang(v.lang) === lang.toLowerCase() ? 2 : 0) + (/natural|neural|online|premium|enhanced/i.test(v.name) ? 1 : 0); };
+    return speechSynthesis.getVoices().filter(v => normLang(v.lang).startsWith(code)).sort((x, y) => score(y) - score(x))[0] || null;
+  }
+  function utter(text, lang, w) {
+    const u = new SpeechSynthesisUtterance(text), p = vset[w];
+    // русский голос можно выбрать вручную в настройках, остальные подбираются по полу персонажа
+    const own = lang.startsWith('ru') && p.v ? speechSynthesis.getVoices().find(v => v.name === p.v) : null;
+    const v = own || pickVoice(lang, w), g = v ? vGender(v) : '';
+    u.lang = lang;
+    if (v) u.voice = v;
+    // если нужного по полу голоса в системе нет, тембр чужого сдвигаем сильнее
+    u.pitch = !own && g && g !== TV[w].g ? (w === 'a' ? Math.min(p.pitch, 0.7) : Math.max(p.pitch, 1.4)) : p.pitch;
+    u.rate = p.rate * (lang.startsWith('ru') ? 1 : 0.9);
+    return u;
+  }
+  // текст по кускам: русский и вставки на иностранных языках читаются голосами своих языков
+  function segs(el, base) {
+    const out = [];
+    const add = (lang, t) => { const last = out[out.length - 1]; if (last && last.lang === lang) last.t += t; else out.push({ lang, t }); };
+    (function walk(node, lang) {
+      node.childNodes.forEach(n => {
+        if (n.nodeType === 3) add(lang, n.nodeValue);
+        else if (n.nodeType === 1 && !n.matches('rt, rp, .py, s, button, svg')) walk(n, VOICE[String(n.getAttribute('lang') || '').slice(0, 2).toLowerCase()] || lang);
+      });
+    })(el, base);
+    return out.filter(s => /[\p{L}\p{N}]/u.test(s.t));
+  }
+  // в курсах языков вставки латиницей или иероглифами внутри русского текста читаются голосом изучаемого языка
+  const L_CH = 'A-Za-zÀ-ÖØ-öø-ÿĀ-ž', J_CH = '\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f々〆ー';
+  const RUN_LAT = new RegExp(String.raw`[${L_CH}][${L_CH}’'-]*(?:[\s,;:!?.]+[${L_CH}][${L_CH}’'-]*)*[.!?]?`, 'g');
+  const RUN_CJK = new RegExp(`[${J_CH}][${J_CH}、。！？]*`, 'g');
+  function splitMixed(p) {
+    const s = cur && cur.sid && byId[cur.sid], code = s && s.lang;
+    if (!code || !p.lang.startsWith('ru')) return [p];
+    const out = [];
+    let at = 0;
+    p.t.replace(code === 'zh' || code === 'ja' ? RUN_CJK : RUN_LAT, (m, i) => {
+      if (m.replace(/[^\p{L}]/gu, '').length < 2) return m;
+      out.push({ t: p.t.slice(at, i), lang: p.lang }, { t: m, lang: VOICE[code] });
+      at = i + m.length;
+      return m;
+    });
+    out.push({ t: p.t.slice(at), lang: p.lang });
+    return out.filter(x => /[\p{L}\p{N}]/u.test(x.t)).map((x, k) => ({ t: x.t, lang: x.lang, w: p.w, on: k ? null : p.on }));
+  }
+  const cleanSay = t => t.replace(/[♡♥☆★✦]/g, '').replace(/\s*[→⟶]\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  // короткими фразами: длинные реплики Chrome иногда обрывает
+  const sentences = t => (t.match(/[^.!?…。！？]+[.!?…。！？]*["»”)]*\s*|[.!?…。！？]+\s*/g) || [t]).map(x => x.trim()).filter(x => /[\p{L}\p{N}]/u.test(x));
+  const voiceWarned = {};
+  function warnVoices(list) {
+    const voices = speechSynthesis.getVoices();
+    if (!voices.length) return;
+    list.forEach(p => {
+      const code = p.lang.slice(0, 2), have = voices.filter(v => normLang(v.lang).startsWith(code));
+      if (!have.length) {
+        if (voiceWarned[code]) return;
+        voiceWarned[code] = 1;
+        toast('Нет голоса для этого языка', `В системе не установлен голос на ${LANG_IN[code]} языке, поэтому браузер может прочитать текст с акцентом или промолчать. Добавь языковой пакет в настройках системы.`, false, p.w);
+      } else if (!(code === 'ru' && vset[p.w].v) && !have.some(v => vGender(v) === TV[p.w].g) && !voiceWarned[code + p.w]) {
+        voiceWarned[code + p.w] = 1;
+        toast(`${T[p.w].short}: голос заменён`, `В системе нет ${p.w === 'a' ? 'мужского' : 'женского'} голоса на ${LANG_IN[code]} языке, поэтому тембр изменён у ближайшего. Голос можно выбрать вручную в окне «Голоса» (значок динамика вверху). Точнее звучит в Microsoft Edge или после установки языкового пакета.`, false, p.w);
+      }
+    });
+  }
+  let sayTok = 0, sayEnd = null, sayKeep = [];
+  function stopSay() {
+    sayTok++;
+    if (CAN_SAY) speechSynthesis.cancel();
+    const f = sayEnd; sayEnd = null; sayKeep = [];
+    if (f) f();
+  }
+  // parts: [{ t, lang, w, on }] — w: кто говорит, on: вызывается, когда реплика начинает звучать
+  function say(parts, end) {
+    stopSay();
+    if (!CAN_SAY) { toast('Озвучка недоступна', 'Этот браузер не умеет читать текст вслух.', false, 'i'); if (end) end(); return; }
+    const list = [];
+    parts.flatMap(splitMixed).forEach(p => sentences(cleanSay(p.t)).forEach((t, k) => list.push({ t, lang: p.lang, w: p.w, on: k ? null : p.on })));
+    if (!list.length) { if (end) end(); return; }
+    warnVoices(list);
+    const tok = sayTok;
+    sayEnd = end || null;
+    list.forEach((p, k) => {
+      const u = utter(p.t, p.lang, p.w);
+      if (p.on) u.onstart = () => { if (tok === sayTok) p.on(); };
+      if (k === list.length - 1) u.onend = u.onerror = () => { if (tok === sayTok) { const f = sayEnd; sayEnd = null; sayKeep = []; if (f) f(); } };
+      sayKeep.push(u); // иначе Chrome может собрать реплику сборщиком мусора и не вызвать onend
+      speechSynthesis.speak(u);
+    });
+  }
+  // кто читает фразу: внутри заметки — её автор, иначе выбранный репетитор, в режиме «Вместе» — по очереди
+  let duoTurn = 'i';
+  function voiceFor(el) {
+    const note = el.closest('.ayano, .ichika');
+    if (note) return note.classList.contains('ichika') ? 'i' : 'a';
+    if (st.tutor !== 'duo') return st.tutor;
+    duoTurn = duoTurn === 'a' ? 'i' : 'a';
+    return duoTurn;
+  }
+  function speak(el) {
+    const full = VOICE[String(el.getAttribute('lang') || '').slice(0, 2).toLowerCase()];
+    if (!full) return;
+    if (el.classList.contains('speaking')) { stopSay(); return; }
+    const w = voiceFor(el);
+    say(segs(el, full).map(p => Object.assign(p, { w })), () => el.classList.remove('speaking', 'by-a', 'by-i'));
+    if (sayEnd) el.classList.add('speaking', 'by-' + w);
+  }
+  function sayNote(btn) {
+    const note = btn.closest('.ayano, .ichika');
+    if (!note) return;
+    if (note.classList.contains('speaking')) { stopSay(); return; }
+    const w = note.classList.contains('ichika') ? 'i' : 'a';
+    say(segs(note, VOICE.ru).map(p => Object.assign(p, { w })), () => { note.classList.remove('speaking'); btn.setAttribute('aria-pressed', 'false'); });
+    if (sayEnd) { note.classList.add('speaking'); btn.setAttribute('aria-pressed', 'true'); }
+  }
+  function sayVN(btn, auto) {
+    const vn = btn.closest('.vn');
+    if (!vn) return;
+    if (btn.classList.contains('on')) { stopSay(); return; }
+    // при автоозвучке текст продолжает печататься, поэтому реплики берём из данных диалога
+    const wrap = vn.closest('.vnw'), src = wrap && VN[+wrap.dataset.vid];
+    if (!auto && vn._finish) vn._finish();
+    const avas = $$('.vn-ava', vn), lines = $$('.vn-line', vn);
+    const parts = lines.map(line => {
+      const w = line.classList.contains('i') ? 'i' : 'a';
+      return { t: (src && src[w]) || $('.vn-text', line).textContent, lang: VOICE.ru, w, on: () => { avas.forEach(a => a.classList.toggle('on', a.classList.contains(w))); lines.forEach(l => l.classList.toggle('talk', l === line)); } };
+    });
+    say(parts, () => { btn.classList.remove('on'); btn.setAttribute('aria-pressed', 'false'); if (vn.classList.contains('done')) avas.forEach(a => a.classList.add('on')); lines.forEach(l => l.classList.remove('talk')); });
+    if (sayEnd) { btn.classList.add('on'); btn.setAttribute('aria-pressed', 'true'); }
+  }
+  // короткие реплики репетиторов (.say): результат теста, подсказки, разборы
+  function saySay(p) {
+    if (!p) return;
+    if (p.classList.contains('speaking')) { stopSay(); return; }
+    const w = p.classList.contains('i') ? 'i' : 'a', txt = $('span', p);
+    if (!txt) return;
+    say(segs(txt, VOICE.ru).map(x => Object.assign(x, { w })), () => p.classList.remove('speaking'));
+    if (sayEnd) p.classList.add('speaking');
+  }
+  // в режиме «Говорят сами» реплики внутри блока звучат по очереди
+  function autoSay(el) {
+    if (!el || !canAuto()) return;
+    const items = $$('.say', el);
+    const parts = items.flatMap(p => { const w = p.classList.contains('i') ? 'i' : 'a', s = $('span', p); return s ? segs(s, VOICE.ru).map(x => Object.assign(x, { w })) : []; });
+    if (!parts.length) return;
+    items.forEach(p => p.classList.add('speaking'));
+    say(parts, () => items.forEach(p => p.classList.remove('speaking')));
+  }
+  const sayLine = (w, t, end) => say([{ t, lang: VOICE.ru, w }], end);
+  // приветствие при выборе репетитора — его собственная реплика с билета
+  function sayGreet(m) {
+    const G = { a: [['a', CARDS.a.say]], i: [['i', CARDS.i.say]], duo: [['a', 'Объясняем вдвоём. Я даю систему.'], ['i', 'А я — примеры и способы запомнить ♡']] };
+    say((G[m] || []).map(([w, t]) => ({ t, lang: VOICE.ru, w })));
+  }
+
+  /* ---------- окно настроек голосов ---------- */
+  const SAMPLE = { a: 'Я Аянокоджи. Объясняю спокойно и по делу — без лишних слов.', i: 'А я Амасава! Со мной учиться весело, сэмпай ♡' };
+  const VMODES = [['auto', 'Говорят сами', 'Репетиторы говорят сами, как только появляются их реплики: диалоги, результаты тестов, подсказки. Звук включится после первого нажатия на странице — так требуют браузеры.'], ['click', 'По кнопке', 'Реплики звучат только когда нажимаешь значок динамика рядом с ними.'], ['off', 'Без голоса', 'Кнопки озвучки скрыты. Фразы на иностранных языках по-прежнему можно послушать нажатием.']];
+  const ruVoices = () => (CAN_SAY ? speechSynthesis.getVoices().filter(v => normLang(v.lang).startsWith('ru')) : []);
+  function voiceRowHTML(w) {
+    const p = vset[w], gname = g => (g === 'm' ? ' · мужской' : g === 'f' ? ' · женский' : '');
+    const opts = ruVoices().map(v => `<option value="${esc(v.name)}"${v.name === p.v ? ' selected' : ''}>${esc(v.name)}${gname(vGender(v))}</option>`).join('');
+    return `<fieldset class="vrow ${w}"><legend><img src="${T[w].face}" alt="" width="28" height="28">${T[w].name}</legend>
+<label class="vfield"><span>Голос</span><select data-vw="${w}" data-vk="v"><option value="">Подобрать автоматически (${w === 'a' ? 'мужской' : 'женский'})</option>${opts}</select></label>
+<label class="vfield"><span>Тон <output>${p.pitch.toFixed(2)}</output></span><input type="range" min="0.5" max="1.6" step="0.05" value="${p.pitch}" data-vw="${w}" data-vk="pitch"></label>
+<label class="vfield"><span>Скорость <output>${p.rate.toFixed(2)}</output></span><input type="range" min="0.6" max="1.5" step="0.05" value="${p.rate}" data-vw="${w}" data-vk="rate"></label>
+<button type="button" class="btn vtest" data-act="vtest" data-w="${w}">${SPK}<span>Послушать</span></button></fieldset>`;
+  }
+  function voicesHTML() {
+    const mode = VMODES.find(x => x[0] === vset.mode);
+    return `<p class="eyebrow">Озвучка</p><h2 class="h2s">Голоса репетиторов</h2>
+<div class="tmode acct-tabs vmodes" role="radiogroup" aria-label="Когда говорят репетиторы">${VMODES.map(([m, l]) => `<button type="button" role="radio" aria-checked="${vset.mode === m}" data-act="vmode" data-m="${m}">${l}</button>`).join('')}</div>
+<p class="acct-note" id="vmodeNote">${mode[2]}</p>
+${CAN_SAY ? voiceRowHTML('a') + voiceRowHTML('i') : '<p class="acct-err">Этот браузер не умеет читать текст вслух.</p>'}
+${CAN_SAY && !ruVoices().length ? '<p class="acct-note">На этом устройстве не найдено русских голосов, поэтому браузер выберет голос сам. Добавь русский языковой пакет с речью в настройках системы или открой сайт в Microsoft Edge.</p>' : ''}
+<p class="acct-note vfine">Голоса — это синтезатор речи твоего устройства: для Аянокоджи подбирается мужской голос, ниже и спокойнее, для Амасавы — женский, выше и живее. Подстрой тон и скорость под то, как ты их слышишь. Настоящие голоса актёров озвучки сайт не использует: это голоса реальных людей, и копировать их без разрешения нельзя.</p>
+<div class="cta"><button type="button" class="btn btn-red" data-act="vclose">Готово</button><button type="button" class="btn" data-act="vreset">Сбросить</button></div>`;
+  }
+  function openVoices() {
+    const d = $('#vdlg'), b = $('#vbox');
+    if (!d || !b) return;
+    b.innerHTML = voicesHTML();
+    d.hidden = false;
+    const f = $('[aria-checked="true"]', b); if (f) f.focus();
+  }
+  function closeVoices() { const d = $('#vdlg'); if (d) d.hidden = true; }
+  if (CAN_SAY && speechSynthesis.addEventListener) speechSynthesis.addEventListener('voiceschanged', () => { const d = $('#vdlg'); if (d && !d.hidden) $('#vbox').innerHTML = voicesHTML(); });
+  document.addEventListener('input', e => {
+    const el = e.target.closest && e.target.closest('#vbox [data-vk]');
+    if (!el) return;
+    const w = el.dataset.vw, k = el.dataset.vk;
+    vset[w][k] = k === 'v' ? el.value : +el.value;
+    const o = el.parentElement.querySelector('output'); if (o) o.textContent = (+el.value).toFixed(2);
+    saveV();
+  });
+  if (CAN_SAY) { try { speechSynthesis.getVoices(); } catch (e) { /* голоса подгрузятся позже */ } }
+
+  // оборачивает иероглифы и кану вне [lang] в <span lang>, чтобы браузер взял японский или китайский шрифт
+  const HAS_CJK = /[぀-ヿ㐀-鿿]/;
+  const CJK_RUN = /[　-〿぀-ヿ㐀-鿿！-＠ｦ-ﾟ～]+/g;
+  function wrapCJK(root, code) {
+    if (!root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => (HAS_CJK.test(n.nodeValue) && !n.parentElement.closest('[lang], rt, rp, .vn, script, style') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT)
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(n => {
+      const t = n.nodeValue, frag = document.createDocumentFragment();
+      let at = 0;
+      t.replace(CJK_RUN, (m, i) => {
+        if (!HAS_CJK.test(m)) return m;
+        frag.append(t.slice(at, i));
+        const s = document.createElement('span');
+        s.lang = code; s.textContent = m;
+        frag.append(s);
+        at = i + m.length;
+        return m;
+      });
+      frag.append(t.slice(at));
+      n.replaceWith(frag);
+    });
   }
 
   let openTimer = 0, quoteTimer = 0, bubbleN = 0;
@@ -691,8 +1089,8 @@ ${window.IQ ? iqPromo() : ''}
     $$('.idwrap').forEach(wrap => {
       const card = $('.idcard', wrap), w = wrap.dataset.w;
       if (fine()) { card.addEventListener('mouseenter', () => card.classList.add('reveal')); card.addEventListener('mouseleave', () => card.classList.remove('reveal')); }
-      card.addEventListener('click', () => { if (!fine()) card.classList.toggle('reveal'); setTutor(w); });
-      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.classList.toggle('reveal'); setTutor(w); } });
+      card.addEventListener('click', () => { if (!fine()) card.classList.toggle('reveal'); setTutor(w, false, true); });
+      card.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.classList.toggle('reveal'); setTutor(w, false, true); } });
       tilt(card, 6);
     });
     const poster = $('#poster'); if (poster) tilt(poster, 5);
@@ -722,7 +1120,7 @@ ${window.IQ ? iqPromo() : ''}
     };
     return `
 <section class="wrap hue" style="--h:${s.hue}">
-  <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">${s.name}</span></nav>
+  <nav class="crumbs" aria-label="Навигация">${crumbRoot(s)}<span aria-current="page">${s.name}</span></nav>
   <header class="s-head">
     <div class="s-glyph" aria-hidden="true">${s.glyph}</div>
     <div class="s-meta">
@@ -734,7 +1132,7 @@ ${window.IQ ? iqPromo() : ''}
     </div>
   </header>
   ${vnHTML({ a: s.intro, i: s.intro2 })}
-  <div class="path">${grades.map(g => `<div class="grade"><h2 class="grade-h"><span>${g}</span>класс</h2><div class="les-list">${s.lessons.map((l, i) => (l[0] === g ? row(l, i) : '')).join('')}</div></div>`).join('')}</div>
+  <div class="path">${grades.map(g => `<div class="grade"><h2 class="grade-h"><span>${g}</span>${gradeWord(s)}</h2><div class="les-list">${s.lessons.map((l, i) => (l[0] === g ? row(l, i) : '')).join('')}</div></div>`).join('')}</div>
 </section>`;
   }
   function mSubject({ sid }) {
@@ -767,8 +1165,8 @@ ${window.IQ ? iqPromo() : ''}
     st.last = { sid, n }; save();
     const [grade, title] = meta;
     const key = sid + '-' + n, total = s.lessons.length;
-    const crumbs = `<nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><a href="#s-${sid}">${s.name}</a><span>/</span><span aria-current="page">Урок ${n}</span></nav>`;
-    const head = tags => `<header class="l-head"><div class="l-num">${pad2(n)}<small>из ${pad2(total)}</small></div><div class="l-titles"><p class="eyebrow">${s.name} · ${grade} класс</p><h1>${esc(title)}</h1>${tags}</div></header>`;
+    const crumbs = `<nav class="crumbs" aria-label="Навигация">${crumbRoot(s)}<a href="#s-${sid}">${s.name}</a><span>/</span><span aria-current="page">Урок ${n}</span></nav>`;
+    const head = tags => `<header class="l-head"><div class="l-num">${pad2(n)}<small>из ${pad2(total)}</small></div><div class="l-titles"><p class="eyebrow">${s.name} · ${gradeLabel(s, grade)}</p><h1>${esc(title)}</h1>${tags}</div></header>`;
     const prev = n > 1 ? n - 1 : 0, next = n < total ? n + 1 : 0;
     const pager = `<nav class="pager" aria-label="Соседние уроки">${prev ? `<a class="pg" href="#l-${sid}-${prev}"><small>← Урок ${prev}</small><span>${esc(s.lessons[prev - 1][1])}</span></a>` : '<span></span>'}${next ? `<a class="pg next" href="#l-${sid}-${next}"><small>Урок ${next} →</small><span>${esc(s.lessons[next - 1][1])}</span></a>` : `<a class="pg next" href="#exam-${sid}"><small>Финал курса →</small><span>Специальный экзамен</span></a>`}</nav>`;
     if (!L) return `<section class="wrap hue" style="--h:${s.hue}">${crumbs}${head('')}<div class="soon">${vnHTML(SAY.soon)}${pager}</div></section>`;
@@ -787,6 +1185,7 @@ ${window.IQ ? iqPromo() : ''}
     <article class="l-body">
       ${vnHTML({ a: L.intro, i: L.intro2 })}
       <section class="goals"><h2 class="h2s">Что ты будешь уметь после урока</h2><ul>${(L.goals || []).map(g => `<li><span>${fmt(g)}</span></li>`).join('')}</ul></section>
+      ${s.lang ? `<p class="say-tip">${SPK.replace('width="16" height="16"', 'width="20" height="20"')}<span>Слова и фразы на ${LANG_IN[s.lang]} с пунктирным подчёркиванием можно послушать — нажми на них. Читают Аянокоджи и Амасава своими голосами: тот, кто сейчас объясняет, а в режиме «Вместе» — по очереди. Тембр и скорость каждого можно настроить в окне «Голоса» (значок динамика вверху).</span></p>` : ''}
       <div class="content" id="content">${fmt(L.c)}</div>
       ${P.length ? `<section class="block" id="practice"><h2 class="h2s">Практика<small>Сначала реши сам — на бумаге. Только потом открывай решение.</small></h2><div class="pr-list">${practice}</div></section>` : ''}
       ${Q.length ? `<section class="block" id="quiz"><h2 class="h2s">Тест<small>+20 PP за каждый верный ответ с первой попытки</small></h2><div class="quiz" id="quizBox">${quiz}</div><div class="qz-score" id="qzScore" hidden></div></section>` : ''}
@@ -795,7 +1194,7 @@ ${window.IQ ? iqPromo() : ''}
       ${pager}
     </article>
     <aside class="l-side">
-      <div class="side-card"><span class="lbl">Кто объясняет</span>${tmodeHTML()}</div>
+      <div class="side-card"><span class="lbl">Кто объясняет</span>${tmodeHTML()}${CAN_SAY ? '<button type="button" class="linkbtn side-voices" data-act="voices">Голоса репетиторов</button>' : ''}</div>
       <div class="side-card"><span class="lbl">Таймер урока</span><div class="timer"><span id="tmv">${pad2(m)}:00</span><button type="button" class="tbtn" id="tmBtn">Старт</button><button type="button" class="tbtn ghost" id="tmReset" aria-label="Сбросить таймер">↺</button></div></div>
       <nav class="side-card toc" id="toc" aria-label="Содержание урока"><span class="lbl">Содержание</span></nav>
     </aside>
@@ -808,6 +1207,23 @@ ${window.IQ ? iqPromo() : ''}
     const content = $('#content');
     if (!content) return;
     $$('table', content).forEach(t => { if (!t.parentElement.classList.contains('tbl')) { const w = document.createElement('div'); w.className = 'tbl'; t.parentNode.insertBefore(w, t); w.appendChild(t); } });
+    // блоки кода: кнопка «Копировать»
+    $$('pre.code', $('.l-body')).forEach(pre => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'code-copy'; b.dataset.act = 'copycode'; b.textContent = 'Копировать';
+      pre.appendChild(b);
+    });
+    // в курсах китайского и японского иероглифы без разметки получают язык: свой шрифт и озвучку
+    const subj = byId[sid];
+    if (subj && (subj.lang === 'zh' || subj.lang === 'ja')) wrapCJK($('.l-body'), subj.lang);
+    // фразы на иностранном языке: доступны с клавиатуры и подсказывают, что их можно послушать
+    $$('.l-body [lang]').forEach(el => { if (!el.closest('a, button')) { el.tabIndex = 0; el.title = 'Нажми, чтобы послушать'; } });
+    // заметки репетиторов можно послушать их голосами
+    if (CAN_SAY) $$('.ayano, .ichika', content).forEach(n => {
+      const w = n.classList.contains('ichika') ? 'i' : 'a';
+      n.classList.add('has-say');
+      n.insertAdjacentHTML('beforeend', `<button type="button" class="note-say" data-act="notesay" aria-pressed="false" aria-label="Послушать: говорит ${T[w].short}" title="Послушать голосом: ${T[w].short}">${SPK}</button>`);
+    });
     // оглавление
     const toc = $('#toc'), items = [];
     $$('h3', content).forEach((h, i) => { h.id = 'sec-' + (i + 1); items.push([h.id, pad2(i + 1), h.textContent]); });
@@ -860,6 +1276,7 @@ ${window.IQ ? iqPromo() : ''}
     const ok = answered.filter(q => q.dataset.ok === '1').length, n = all.length;
     out.hidden = false;
     out.innerHTML = `<b>Результат: ${ok} из ${n}</b>${sayHTML(quizSay(ok, n))}`;
+    autoSay(out);
   }
 
   /* ---------- специальный экзамен ---------- */
@@ -871,7 +1288,7 @@ ${window.IQ ? iqPromo() : ''}
     xmPool = [];
     all.forEach((L, i) => { if (L && L.q) L.q.forEach(q => xmPool.push({ q: q.q, o: q.o, a: q.a, e: q.e, n: i + 1 })); });
     const best = st.exam[sid];
-    const crumbs = `<nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><a href="#s-${sid}">${s.name}</a><span>/</span><span aria-current="page">Специальный экзамен</span></nav>`;
+    const crumbs = `<nav class="crumbs" aria-label="Навигация">${crumbRoot(s)}<a href="#s-${sid}">${s.name}</a><span>/</span><span aria-current="page">Специальный экзамен</span></nav>`;
     if (xmPool.length < 5) return `<section class="wrap hue" style="--h:${s.hue}">${crumbs}<div class="xm-top"><header class="xm-head"><p class="eyebrow">Специальный экзамен</p><h1>${s.name}</h1></header>${examArt}</div><div class="xm-stage">${vnHTML(SAY.noexam)}</div></section>`;
     return `
 <section class="wrap hue" style="--h:${s.hue}">
@@ -1034,7 +1451,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
         <li><b>В конце курса сдай специальный экзамен.</b> Десять случайных вопросов покажут, какие темы держатся, а какие — нет.</li>
       </ol>
       <h2>Что внутри</h2>
-      <p>${SUBJ.length} предметов и ${TOTAL} уроков: ${SUBJ.map(s => `${s.name.toLowerCase()} (${s.lessons.length})`).join(', ')}. Каждый урок — это вступление, цели, теория с разбором примеров и ловушками, практика с решениями, тест и конспект.</p>
+      <p>${SCHOOL.length} школьных предметов и ${SCHOOL_TOTAL} уроков: ${SCHOOL.map(s => `${s.name.toLowerCase()} (${s.lessons.length})`).join(', ')}. Раздел иностранных языков — ${LANGS.length} курсов от A2 до C1 и ${LANG_TOTAL} уроков: ${LANGS.map(s => s.name.toLowerCase()).join(', ')}. Раздел программирования — ${PROGS.length} курсов до уровня Junior и ${PROG_TOTAL} уроков: ${PROGS.map(s => s.name).join(', ')}. Каждый урок — это вступление, цели, теория с разбором примеров и ловушками, практика с решениями, тест и конспект.</p>
       <p class="fine">Неофициальный фан-проект. Аянокоджи Киётака и Амасава Ичика — персонажи серии ранобэ «Добро пожаловать в класс превосходства» (Classroom of the Elite) Сёго Кинугасы; права на персонажей принадлежат правообладателям. Иллюстрации — фан-арты, подписи авторов сохранены на изображениях. Учебные тексты написаны по школьной программе 8–11 классов и помогают разобраться в учебнике, а не заменяют его.</p>
     </div>
   </div>
@@ -1044,9 +1461,10 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
   const vMissing = () => `<section class="wrap soon"><nav class="crumbs"><a href="#home">Предметы</a></nav><h1 class="h1" style="margin:24px 0">Такой страницы нет</h1>${vnHTML(SAY.missing)}</section>`;
 
   /* ---------- выбор репетитора ---------- */
-  function setTutor(m, quiet) {
+  function setTutor(m, quiet, greet) {
     if (!MODES[m]) return;
     const changed = st.tutor !== m;
+    if (changed) stopSay();
     st.tutor = m; save();
     tutorHud();
     $$('.tmode button').forEach(b => b.setAttribute('aria-checked', b.dataset.t === m ? 'true' : 'false'));
@@ -1056,12 +1474,14 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
       refreshVN();
       if (!quiet) toast(m === 'duo' ? 'Объясняют вдвоём' : `Объясняет ${MODES[m].label}`, MODES[m].note, false, m === 'duo' ? 'i' : m);
     }
+    // выбранный репетитор здоровается своим голосом: сам — в режиме «Говорят сами», по клику на билет — всегда
+    if (!quiet && (greet ? CAN_SAY && vset.mode !== 'off' : changed && canAuto())) sayGreet(m);
   }
 
   /* ---------- маршрутизация ---------- */
   const viewEl = $('#view'), shut = $('#shutter');
-  const VIEWS = Object.assign({ home: vHome, subject: vSubject, lesson: vLesson, exam: vExam, progress: vProgress, about: vAbout, missing: vMissing }, (window.IQ && window.IQ.views) || {});
-  const MOUNT = Object.assign({ home: mHome, subject: mSubject, lesson: mLesson, exam: mExam, progress: mProgress, about: () => typeVN(), missing: () => typeVN() }, (window.IQ && window.IQ.mounts) || {});
+  const VIEWS = Object.assign({ home: vHome, lang: vLang, prog: vProg, subject: vSubject, lesson: vLesson, exam: vExam, progress: vProgress, about: vAbout, missing: vMissing }, (window.IQ && window.IQ.views) || {});
+  const MOUNT = Object.assign({ home: mHome, lang: () => typeVN(), prog: () => typeVN(), subject: mSubject, lesson: mLesson, exam: mExam, progress: mProgress, about: () => typeVN(), missing: () => typeVN() }, (window.IQ && window.IQ.mounts) || {});
   let cur = { v: '' }, cleanups = [];
   function onCleanup(f) { cleanups.push(f); }
 
@@ -1070,6 +1490,8 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     let m;
     if (!h || h === 'home') return { v: 'home' };
     if (h === 'subjects' || h === 'tutors') return { v: 'home', anchor: h };
+    if (h === 'lang') return { v: 'lang' };
+    if (h === 'prog') return { v: 'prog' };
     if ((m = h.match(/^s-([a-z]+)$/)) && byId[m[1]]) return { v: 'subject', sid: m[1] };
     if ((m = h.match(/^l-([a-z]+)-(\d+)$/)) && byId[m[1]]) return { v: 'lesson', sid: m[1], n: +m[2] };
     if ((m = h.match(/^exam-([a-z]+)$/)) && byId[m[1]]) return { v: 'exam', sid: m[1] };
@@ -1092,11 +1514,16 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     const el = document.getElementById(id);
     if (el) el.scrollIntoView({ behavior: instant || reduce() ? 'auto' : 'smooth', block: 'start' });
   }
+  let curHash = '';
   async function route() {
-    const r = parse(location.hash);
+    const hash = location.hash;
+    // переходы копятся в очереди; если адрес уже показан, повторно не перерисовываем
+    if (cur.v !== '' && hash === curHash) return;
+    const r = parse(hash);
     if (r.v === 'home' && cur.v === 'home') { if (r.anchor) jump(r.anchor); else window.scrollTo({ top: 0, behavior: reduce() ? 'auto' : 'smooth' }); return; }
     const animate = cur.v !== '' && !reduce();
     if (animate) await shutter(true);
+    stopSay();
     cleanups.forEach(f => { try { f(); } catch (e) { /* ignore */ } });
     cleanups = [];
     VN.length = 0;
@@ -1104,8 +1531,10 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     let html;
     try { html = await VIEWS[r.v](r); } catch (e) { console.error(e); html = vMissing(); }
     viewEl.innerHTML = html;
-    cur = r;
-    const navKey = r.v === 'progress' || r.v === 'about' ? r.v : r.v.startsWith('iq') ? 'iq' : 'home';
+    cur = r; curHash = hash;
+    const navKey = r.v === 'progress' || r.v === 'about' ? r.v : r.v.startsWith('iq') ? 'iq'
+      : r.v === 'lang' || (r.sid && byId[r.sid] && byId[r.sid].section === 'lang') ? 'lang'
+        : r.v === 'prog' || (r.sid && byId[r.sid] && byId[r.sid].section === 'prog') ? 'prog' : 'home';
     $$('.nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === navKey));
     window.scrollTo({ top: 0, behavior: 'instant' });
     try { (MOUNT[r.v] || (() => {}))(r); } catch (e) { console.error(e); }
@@ -1148,9 +1577,35 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     chibi: el => {
       bubbleN = (bubbleN + 1) % BUBBLE.length;
       const t = $('#bubbleT'); if (t) t.textContent = BUBBLE[bubbleN];
+      if (CAN_SAY && vset.mode !== 'off') sayLine('i', BUBBLE[bubbleN]);
       burst(el, true);
     },
     vnskip: el => { if (el._finish) el._finish(); },
+    vnvoice: btn => sayVN(btn),
+    notesay: sayNote,
+    saysay: btn => saySay(btn.closest('.say')),
+    copycode: btn => {
+      const code = $('code', btn.closest('pre')), text = code ? code.textContent : '';
+      const done = ok => { btn.textContent = ok ? 'Скопировано' : 'Выдели и скопируй'; setTimeout(() => { btn.textContent = 'Копировать'; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+      else done(false);
+    },
+    heroq: () => { const q = $('#heroQ'), t = q ? q.textContent : ''; sayLine('a', QUOTES.find(x => t && x.startsWith(t)) || QUOTES[0]); },
+    voices: () => openVoices(),
+    vclose: () => closeVoices(),
+    vmode: el => {
+      vset.mode = el.dataset.m; saveV();
+      if (vset.mode === 'off') stopSay();
+      $$('#vbox [data-act="vmode"]').forEach(b => b.setAttribute('aria-checked', b === el ? 'true' : 'false'));
+      const n = $('#vmodeNote'); if (n) n.textContent = VMODES.find(x => x[0] === vset.mode)[2];
+    },
+    vtest: el => sayLine(el.dataset.w, SAMPLE[el.dataset.w]),
+    vreset: () => {
+      vset.mode = 'auto';
+      ['a', 'i'].forEach(w => { vset[w] = { v: '', pitch: TV[w].pitch, rate: TV[w].rate }; });
+      saveV();
+      const b = $('#vbox'); if (b) b.innerHTML = voicesHTML();
+    },
     finish: btn => {
       const key = btn.dataset.k;
       if (!key || st.done[key]) return;
@@ -1179,6 +1634,8 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     if (qb) return answerQuiz(qb);
     const xb = e.target.closest('[data-xj]');
     if (xb) return answerExam(xb);
+    const sp = e.target.closest('.l-body [lang]');
+    if (sp && !e.target.closest('a, button, summary, input')) { speak(sp); return; }
     const a = e.target.closest('[data-act]');
     if (a && actions[a.dataset.act]) actions[a.dataset.act](a, e);
     const pi = e.target.closest('.pal-i');
@@ -1209,14 +1666,14 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
 
   /* ---------- поиск ---------- */
   const IDX = [];
-  SUBJ.forEach(s => s.lessons.forEach((l, i) => IDX.push({ sid: s.id, n: i + 1, g: l[0], t: l[1], s: s.name, h: s.hue, k: (l[1] + ' ' + s.name).toLowerCase().replace(/ё/g, 'е') })));
+  SUBJ.forEach(s => s.lessons.forEach((l, i) => IDX.push({ sid: s.id, n: i + 1, g: s.section ? l[0] : l[0] + ' кл', t: l[1], s: s.name, h: s.hue, k: (l[1] + ' ' + s.name + ' ' + (s.section === 'lang' ? 'язык ' + l[0] : s.section === 'prog' ? 'программирование код ' + l[0] : '')).toLowerCase().replace(/ё/g, 'е') })));
   const pal = $('#pal'), palIn = $('#palIn'), palList = $('#palList');
   let palLastFocus = null;
   function renderPal(q) {
     const words = q.toLowerCase().replace(/ё/g, 'е').split(/\s+/).filter(Boolean);
     const res = (words.length ? IDX.filter(x => words.every(w => x.k.includes(w))) : IDX.filter(x => x.n === 1)).slice(0, 40);
     palList.innerHTML = res.length
-      ? res.map((x, i) => `<a class="pal-i hue${i ? '' : ' on'}" href="#l-${x.sid}-${x.n}" style="--h:${x.h}"><span class="pal-s">${x.s}</span><span class="pal-t">${esc(x.t)}</span><span class="pal-g">${x.g} кл · урок ${x.n}</span></a>`).join('')
+      ? res.map((x, i) => `<a class="pal-i hue${i ? '' : ' on'}" href="#l-${x.sid}-${x.n}" style="--h:${x.h}"><span class="pal-s">${x.s}</span><span class="pal-t">${esc(x.t)}</span><span class="pal-g">${x.g} · урок ${x.n}</span></a>`).join('')
       : '<p class="pal-empty">Ничего не нашлось. Попробуй другое слово — например, «логарифм», «Пётр» или «Passive».</p>';
   }
   function openPal() { palLastFocus = document.activeElement; pal.hidden = false; palIn.value = ''; renderPal(''); palIn.focus(); }
@@ -1237,7 +1694,8 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
   });
   document.addEventListener('keydown', e => {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K' || e.key === 'л' || e.key === 'Л')) { e.preventDefault(); pal.hidden ? openPal() : closePal(); return; }
-    if (e.key === 'Escape') { closePal(); closeAcct(); return; }
+    if (e.key === 'Escape') { closePal(); closeAcct(); closeVoices(); return; }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.l-body [lang]')) { e.preventDefault(); speak(e.target); return; }
     const tag = (e.target.tagName || '').toLowerCase();
     if (e.key === '/' && pal.hidden && tag !== 'input' && tag !== 'textarea') { e.preventDefault(); openPal(); }
   });
@@ -1304,11 +1762,12 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
   if (savedTheme === 'dark' || savedTheme === 'light') root.dataset.theme = savedTheme;
   // общий интерфейс для раздела IQ (iq.js)
   window.AYK = {
-    get st() { return st; }, save, addPP, toast, burst, vnHTML, sayHTML, typeVN, onCleanup, esc, T,
+    get st() { return st; }, save, addPP, toast, burst, vnHTML, sayHTML, typeVN, autoSay, onCleanup, esc, T,
     cloud: () => cloud
   };
   hud();
   tutorHud();
+  root.dataset.voice = vset.mode;
   acctHud();
   symbols();
   cursorRing();

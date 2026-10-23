@@ -534,7 +534,7 @@
     return `
 <section class="wrap iq">
   <nav class="crumbs" aria-label="Навигация"><a href="#home">Главная</a><span>/</span><span aria-current="page">IQ</span></nav>
-  <header class="iq-head"><p class="eyebrow">OAA · раздел 2</p><h1>Интеллект <span class="red">IQ</span></h1><p>Бесконечные задания на логику, закономерности и пространственное мышление. Каждое собирается заново из случайного зерна — у задания есть свой номер-отпечаток, и тебе никогда не выпадет то, что ты уже решал.</p></header>
+  <header class="iq-head"><p class="eyebrow">OAA · раздел 4</p><h1>Интеллект <span class="red">IQ</span></h1><p>Бесконечные задания на логику, закономерности и пространственное мышление. Каждое собирается заново из случайного зерна — у задания есть свой номер-отпечаток, и тебе никогда не выпадет то, что ты уже решал.</p></header>
   ${ay.vnHTML({ a: 'Интеллект тренируется так же, как мышцы: регулярно и с постепенно растущей нагрузкой. Начни с уровня, где ты решаешь больше половины задач. Если решаешь всё — переходи выше. Тренировка на слишком лёгком уровне — это не тренировка, а отдых.', i: 'Сэмпай, здесь задания никогда не заканчиваются ♡ Пять уровней: от «Класса D» до «Белой комнаты». Про последний уровень я кое-что знаю… Скажем так: там будет весело. Для меня.' })}
   <div class="iq-levels">${lv}</div>
   <a class="iq-test" href="#iq-test"><span class="iq-test-k">IQ-тест</span><span class="iq-test-t">24 задания · 25 минут · сложность подстраивается под тебя</span><span class="iq-test-b">${q.best ? `Лучший результат: <b>${q.best}</b> — ${iqLabel(q.best)}` : 'Ты ещё не проходил тест'}</span><span class="btn btn-red">Начать тест →</span></a>
@@ -685,7 +685,7 @@ ${ay.vnHTML(say)}
       else nextTask();
       const s = document.getElementById('iqStage'); if (s) s.scrollIntoView({ block: 'start', behavior: 'smooth' });
     } else if (act === 'iqskip') { if (cur && !cur.done) remember(cur.fp); nextTask(); }
-    else if (act === 'iqhint') { const h = document.getElementById('iqHint'); if (h) h.hidden = false; }
+    else if (act === 'iqhint') { const h = document.getElementById('iqHint'); if (h) { h.hidden = false; A().autoSay(h); } }
     else if (act === 'iqstart') startTest();
   });
 

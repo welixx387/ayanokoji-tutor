@@ -6,15 +6,17 @@
   const LESSONS = window.LESSONS;
   const byId = Object.fromEntries(SUBJ.map(s => [s.id, s]));
   const TOTAL = SUBJ.reduce((a, s) => a + s.lessons.length, 0);
-  // школьные предметы и разделы «Иностранные языки» (уровни CEFR) и «Программирование» (Основы и Junior)
+  // школьные предметы и разделы «Подготовка к ЕГЭ» (ступени: с нуля, часть 1, часть 2),
+  // «Иностранные языки» (уровни CEFR) и «Программирование» (Основы и Junior)
   const SCHOOL = SUBJ.filter(s => !s.section);
+  const EGES = SUBJ.filter(s => s.section === 'ege');
   const LANGS = SUBJ.filter(s => s.section === 'lang');
   const PROGS = SUBJ.filter(s => s.section === 'prog');
   const sumL = list => list.reduce((a, s) => a + s.lessons.length, 0);
-  const SCHOOL_TOTAL = sumL(SCHOOL), LANG_TOTAL = sumL(LANGS), PROG_TOTAL = sumL(PROGS);
-  const gradeLabel = (s, g) => (s.section === 'lang' ? `уровень ${g}` : s.section === 'prog' ? g : `${g} класс`);
-  const gradeWord = s => (s.section === 'lang' ? 'уровень' : s.section === 'prog' ? '' : 'класс');
-  const SECTION_LINK = { lang: '<a href="#lang">Языки</a><span>/</span>', prog: '<a href="#prog">Программирование</a><span>/</span>' };
+  const SCHOOL_TOTAL = sumL(SCHOOL), EGE_TOTAL = sumL(EGES), LANG_TOTAL = sumL(LANGS), PROG_TOTAL = sumL(PROGS);
+  const gradeLabel = (s, g) => (s.section === 'lang' ? `уровень ${g}` : s.section ? g : `${g} класс`);
+  const gradeWord = s => (s.section === 'lang' ? 'уровень' : s.section ? '' : 'класс');
+  const SECTION_LINK = { ege: '<a href="#ege">ЕГЭ</a><span>/</span>', lang: '<a href="#lang">Языки</a><span>/</span>', prog: '<a href="#prog">Программирование</a><span>/</span>' };
   const crumbRoot = s => `<a href="#home">Предметы</a><span>/</span>${(s && SECTION_LINK[s.section]) || ''}`;
   const root = document.documentElement;
   const $ = (s, r = document) => r.querySelector(s);
@@ -449,19 +451,27 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   }
 
   /* ---------- загрузка уроков ---------- */
-  const pending = {};
+  const pending = {}, bundles = {};
+  const addScript = src => new Promise(res => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => res(true);
+    s.onerror = () => { s.remove(); res(false); };
+    document.head.appendChild(s);
+  });
+  // курс может лежать одним файлом data/<sid>/all.js — так он публикуется в артефакт, где число файлов ограничено
   function loadLesson(sid, n) {
     const have = LESSONS[sid] && LESSONS[sid][n];
     if (have) return Promise.resolve(have);
     const key = sid + '-' + n;
     if (!pending[key]) {
-      pending[key] = new Promise(res => {
-        const s = document.createElement('script');
-        s.src = `data/${sid}/${pad2(n)}.js`;
-        s.onload = () => res((LESSONS[sid] && LESSONS[sid][n]) || null);
-        s.onerror = () => { s.remove(); delete pending[key]; res(null); };
-        document.head.appendChild(s);
-      });
+      pending[key] = (async () => {
+        if (!bundles[sid] && !(await addScript(`data/${sid}/${pad2(n)}.js`))) bundles[sid] = bundles[sid] || addScript(`data/${sid}/all.js`);
+        if (bundles[sid] && !(await bundles[sid])) delete bundles[sid];
+        const L = (LESSONS[sid] && LESSONS[sid][n]) || null;
+        if (!L) delete pending[key];
+        return L;
+      })();
     }
     return pending[key];
   }
@@ -505,10 +515,23 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   const codeBlocks = html => html.replace(/<pre class="code"(?: data-lang="([\w+-]+)")?>\n?([\s\S]*?)<\/pre>/g, (m, lang, body) =>
     `<pre class="code"${lang ? ` data-lang="${lang}" data-label="${CODE_LABEL[lang] || lang}"` : ''}><code>${hlCode(body.replace(/\s+$/, ''), lang)}</code></pre>`);
 
+  // подпись блока (data-t) выводится через CSS attr() и не может содержать теги:
+  // степени и индексы в ней — символами Юникода, дроби — через косую черту
+  const SUPC = { 0: '⁰', 1: '¹', 2: '²', 3: '³', 4: '⁴', 5: '⁵', 6: '⁶', 7: '⁷', 8: '⁸', 9: '⁹', '+': '⁺', '-': '⁻', '−': '⁻', n: 'ⁿ', i: 'ⁱ' };
+  const SUBC = { 0: '₀', 1: '₁', 2: '₂', 3: '₃', 4: '₄', 5: '₅', 6: '₆', 7: '₇', 8: '₈', 9: '₉', '+': '₊', '-': '₋', '−': '₋', a: 'ₐ', e: 'ₑ', o: 'ₒ', x: 'ₓ', n: 'ₙ', i: 'ᵢ' };
+  const uniMap = (s, map) => [...s].every(c => map[c]) ? [...s].map(c => map[c]).join('') : null;
+  const plainLabel = v => v
+    .replace(/\[\[([^\[\]|]+?)\|([^\[\]]+?)\]\]/g, '$1/$2')
+    .replace(/([√∛∜])\[([^\[\]]+)\]/g, '$1($2)')
+    .replace(/\^(\([^()]*\)|[−-]?[0-9]+|[a-zA-Z])/g, (m, g) => uniMap(g.replace(/^\((.*)\)$/, '$1'), SUPC) || m)
+    .replace(/_(\([^()]*\)|[0-9]+|[a-zA-Z])/g, (m, g) => uniMap(g.replace(/^\((.*)\)$/, '$1'), SUBC) || m);
+
   function fmt(html) {
     if (!html) return '';
     return codeBlocks(String(html)).split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/).map((part, i) => {
       if (i % 2) return part;
+      const labels = [];
+      part = part.replace(/ data-t="([^"]*)"/g, (m, v) => ` data-t="\u0001${labels.push(plainLabel(v)) - 1}\u0001"`);
       // корни и дроби могут быть вложены друг в друга — раскрываем изнутри наружу
       for (let k = 0; k < 4; k++) {
         const before = part;
@@ -524,7 +547,8 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
         .replace(/\^\(([^()]*)\)/g, '<sup>$1</sup>')
         .replace(/\^([−-]?[0-9]+|[a-zA-Zα-ωπ°*])/g, '<sup>$1</sup>')
         .replace(/_\(([^()]*)\)/g, '<sub>$1</sub>')
-        .replace(/_([0-9]+|[a-zA-Zα-ω]|[а-яёА-ЯЁ]+)/g, '<sub>$1</sub>');
+        .replace(/_([0-9]+|[a-zA-Zα-ω]|[а-яёА-ЯЁ]+)/g, '<sub>$1</sub>')
+        .replace(/\u0001(\d+)\u0001/g, (m, k) => labels[k]);
     }).join('');
   }
 
@@ -634,7 +658,7 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   <div class="hero-txt">
     <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Кодо Икусэй · 8–11 класс · все предметы</p>
     <h1 class="hero-h"><span class="ln"><span>Репетитор</span></span><span class="ln"><span class="red">Аянокоджи</span></span><span class="ln sm"><span class="pink">и Амасава Ичика</span></span></h1>
-    <p class="hero-sub">${SCHOOL.length} школьных предметов, ${LANGS.length} иностранных языков от A2 до C1, ${PROGS.length} курсов программирования до уровня Junior и ${TOTAL} подробных уроков по 30–40 минут: теория, разборы, ловушки, практика с решениями и тест. Аянокоджи объясняет спокойно и по шагам, Амасава — живо и с подсказками для запоминания. Выбери одного или учись с обоими.</p>
+    <p class="hero-sub">${SCHOOL.length} школьных предметов, подготовка к ЕГЭ по ${EGES.length} предметам с нуля, ${LANGS.length} иностранных языков от A2 до C1, ${PROGS.length} курсов программирования до уровня Junior и ${TOTAL} подробных уроков по 30–40 минут: теория, разборы, ловушки, практика с решениями и тест. Аянокоджи объясняет спокойно и по шагам, Амасава — живо и с подсказками для запоминания. Выбери одного или учись с обоими.</p>
     <blockquote class="hero-q"><span id="heroQ">${QUOTES[0]}</span><span class="caret" aria-hidden="true"></span>${CAN_SAY ? `<button type="button" class="q-say" data-act="heroq" aria-label="Послушать: говорит Аянокоджи">${SPK}</button>` : ''}</blockquote>
     <div class="cta">
       <button type="button" class="btn btn-red" data-to="subjects">Выбрать предмет <span aria-hidden="true">→</span></button>
@@ -663,6 +687,7 @@ ${tab === 'login' ? `<form class="acct-form" data-form="login" novalidate>
   <header class="sec-h"><p class="eyebrow">OAA · раздел 1 · академические способности</p><h2>Выбери предмет</h2><p>Курсы идут от 8 к 11 классу. Начать можно с любого урока, но если тема даётся тяжело — вернись на пару уроков назад. Пробелы в основании видны сразу.</p></header>
   <div class="grid-subj">${SCHOOL.map(cardSubj).join('')}</div>
 </section>
+${EGES.length ? egePromo() : ''}
 ${LANGS.length ? langPromo() : ''}
 ${PROGS.length ? progPromo() : ''}
 ${window.IQ ? iqPromo() : ''}
@@ -686,7 +711,7 @@ ${window.IQ ? iqPromo() : ''}
     return `<section class="wrap sec" id="iqsec">
   <div class="iq-promo">
     <div class="iq-promo-t">
-      <p class="eyebrow">OAA · раздел 4 · интеллект</p>
+      <p class="eyebrow">OAA · раздел 5 · интеллект</p>
       <h2>IQ-тренажёр</h2>
       <p>Бесконечные задания восьми типов: числовые и буквенные ряды, матрицы фигур, логические цепочки, повороты узоров. Пять уровней сложности — от «Класса D» до «Белой комнаты». Каждое задание собирается заново и получает свой номер: того, что ты уже решал, генератор не выдаст повторно.</p>
       <ul class="iq-promo-l">${window.IQ.LEVELS.map(l => `<li><b>${l.n}</b>${l.name}</li>`).join('')}</ul>
@@ -697,10 +722,51 @@ ${window.IQ ? iqPromo() : ''}
 </section>`;
   }
 
+  /* ---------- раздел «Подготовка к ЕГЭ» ---------- */
+  function egePromo() {
+    return `<section class="wrap sec" id="egesec" style="scroll-margin-top:calc(var(--head) + 8px)">
+  <header class="sec-h"><p class="eyebrow">OAA · раздел 2 · подготовка к ЕГЭ</p><h2>ЕГЭ с нуля: русский, профильная математика, информатика</h2><p>${EGES.length} курса и ${EGE_TOTAL} уроков: сначала фундамент с самого начала, потом каждое задание экзамена по порядку — правило, алгоритм, разбор типичных ловушек и задачи с подробными решениями. Формат — по демоверсиям ФИПИ 2026 года.</p></header>
+  <div class="grid-subj">${EGES.map(cardSubj).join('')}</div>
+  <div class="cta" style="margin-top:28px"><a class="btn btn-red" href="#ege">Открыть подготовку к ЕГЭ <span aria-hidden="true">→</span></a></div>
+</section>`;
+  }
+  // главное о трёх экзаменах; шкалы и пороги каждый год утверждает Рособрнадзор
+  const EGE_INFO = [
+    ['egerus', '27: 26 с кратким ответом и сочинение', '3 ч 30 мин', '50', '24 — для аттестата; для поступления вузы требуют больше'],
+    ['egemath', '19: 12 с кратким ответом и 7 с развёрнутым', '3 ч 55 мин', '32', '27 тестовых (5 первичных)'],
+    ['egeinf', '27, все на компьютере', '3 ч 55 мин', '29', '40 тестовых (6 первичных)']
+  ];
+  function vEge() {
+    return `
+<section class="wrap lang-page ege-page">
+  <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">ЕГЭ</span></nav>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 2</p><h1 class="h1">Подготовка к ЕГЭ</h1><p>${EGES.length} курса с самого нуля: русский язык, профильная математика и информатика. Каждый идёт ступенями — фундамент, затем задания экзамена по порядку — и заканчивается специальным экзаменом. Всего ${EGE_TOTAL} уроков.</p></header>
+  ${vnHTML({ a: 'ЕГЭ проверяет не талант, а подготовку. Каждое задание — это конкретный навык, и его можно отработать. Поэтому план простой: закрыть фундамент, затем пройти задания по порядку и решать варианты на время. Начинать с нуля — не слабость, а самый быстрый путь.', i: 'Сэмпай, не пугайся слова «экзамен» ♡ В каждом уроке есть алгоритм: что видишь в задании — что делаешь. Отмечай уроки пройденными и возвращайся к ошибкам. Шаг за шагом — и баллы вырастут, я проверяла!' })}
+  <div class="grid-subj">${EGES.map(cardSubj).join('')}</div>
+  <section class="sec">
+    <header class="sec-h"><p class="eyebrow">Формат 2026 года</p><h2>Три экзамена коротко</h2></header>
+    <div class="tbl"><table><thead><tr><th>Экзамен</th><th>Заданий</th><th>Время</th><th>Первичных баллов</th><th>Минимальный балл</th></tr></thead><tbody>${EGE_INFO.filter(([id]) => byId[id]).map(([id, n, t, p, min]) => `<tr><td><a href="#s-${id}">${esc(byId[id].name.replace('ЕГЭ · ', ''))}</a></td><td>${n}</td><td>${t}</td><td>${p}</td><td>${min}</td></tr>`).join('')}</tbody></table></div>
+  </section>
+  <section class="sec">
+    <header class="sec-h"><p class="eyebrow">План</p><h2>Как готовиться, чтобы был результат</h2></header>
+    <div class="content lang-how">
+      <ol>
+        <li><b>Начни с фундамента.</b> Уроки ступени «С нуля» закрывают то, без чего задания экзамена не решаются: части речи и члены предложения, дроби и уравнения, Python и системы счисления.</li>
+        <li><b>Проходи задания по порядку.</b> В каждом уроке — правило, алгоритм решения, разбор ловушек, задачи с решениями и тест. Решай сначала сам, на бумаге или в редакторе кода.</li>
+        <li><b>Веди тетрадь ошибок.</b> Каждую ошибку выписывай с правилом, которое её объясняет. Через неделю перерешай. Так исчезают «глупые» потери баллов.</li>
+        <li><b>Решай варианты на время.</b> После курса бери варианты из открытого банка заданий ФИПИ и проходи их целиком, с часами, как на экзамене.</li>
+        <li><b>Занимайся регулярно.</b> Час в день пять дней в неделю даёт больше, чем пять часов в воскресенье. За учебный год с нуля реально выйти на 70–80+ баллов.</li>
+      </ol>
+      <p class="fine">Формат заданий описан по демоверсиям ФИПИ 2026 года. Шкалы перевода баллов и минимальные баллы ежегодно утверждает Рособрнадзор, а вузы устанавливают свои пороги, — перед экзаменом сверься с fipi.ru и правилами приёма выбранного вуза.</p>
+    </div>
+  </section>
+</section>`;
+  }
+
   /* ---------- раздел «Программирование» ---------- */
   function progPromo() {
     return `<section class="wrap sec" id="progsec" style="scroll-margin-top:calc(var(--head) + 8px)">
-  <header class="sec-h"><p class="eyebrow">OAA · раздел 3 · программирование</p><h2>Программирование: до уровня Junior</h2><p>${PROGS.length} курсов по ${Math.round(PROG_TOTAL / PROGS.length)} уроков: Linux, основы системного программирования, C, C++, Rust, Python и ассемблер. Код с подсветкой, задачи с решениями и подготовка к собеседованию на позицию Junior.</p></header>
+  <header class="sec-h"><p class="eyebrow">OAA · раздел 4 · программирование</p><h2>Программирование: до уровня Junior</h2><p>${PROGS.length} курсов по ${Math.round(PROG_TOTAL / PROGS.length)} уроков: Linux, основы системного программирования, C, C++, Rust, Python и ассемблер. Код с подсветкой, задачи с решениями и подготовка к собеседованию на позицию Junior.</p></header>
   <div class="grid-subj">${PROGS.map(cardSubj).join('')}</div>
   <div class="cta" style="margin-top:28px"><a class="btn btn-red" href="#prog">Открыть раздел программирования <span aria-hidden="true">→</span></a></div>
 </section>`;
@@ -719,7 +785,7 @@ ${window.IQ ? iqPromo() : ''}
     return `
 <section class="wrap lang-page prog-page">
   <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">Программирование</span></nav>
-  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 3</p><h1 class="h1">Программирование</h1><p>${PROGS.length} курсов — от первой команды в терминале до уровня Junior: ${Math.round(PROG_TOTAL / PROGS.length)} уроков в каждом, восемь на основы и восемь на уровень Junior, а в конце — специальный экзамен.</p></header>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 4</p><h1 class="h1">Программирование</h1><p>${PROGS.length} курсов — от первой команды в терминале до уровня Junior: ${Math.round(PROG_TOTAL / PROGS.length)} уроков в каждом, восемь на основы и восемь на уровень Junior, а в конце — специальный экзамен.</p></header>
   ${vnHTML({ a: 'Программирование учат руками, а не глазами. В каждом уроке есть код — не копируй его, а набирай сам, запускай, ломай и чини. Ошибка компилятора — не провал, а подсказка. Через месяц ты начнёшь понимать её с первого взгляда.', i: 'Сэмпай, я составила маршрут ♡ Начни с Linux и Python, потом C — и тогда ассемблер, системное программирование, C++ и Rust покажутся логичными, а не страшными. Код в уроках можно скопировать кнопкой в углу блока!' })}
   <ol class="prog-path">${PROG_PATH.filter(([id]) => byId[id]).map(([id, step, what], k) => `<li><a href="#s-${id}" class="hue" style="--h:${byId[id].hue}"><span class="pp-n">${k + 1}</span><span class="pp-t"><small>${step}</small><b>${byId[id].name}</b><span>${what}</span></span></a></li>`).join('')}</ol>
   <div class="grid-subj">${PROGS.map(cardSubj).join('')}</div>
@@ -743,7 +809,7 @@ ${window.IQ ? iqPromo() : ''}
   /* ---------- раздел «Иностранные языки» ---------- */
   function langPromo() {
     return `<section class="wrap sec" id="langsec" style="scroll-margin-top:calc(var(--head) + 8px)">
-  <header class="sec-h"><p class="eyebrow">OAA · раздел 2 · иностранные языки</p><h2>Иностранные языки: от A2 до C1</h2><p>${LANGS.length} углублённых курсов по ${Math.round(LANG_TOTAL / LANGS.length)} уроков: грамматика уровней B1, B2 и C1, лексика, стратегии экзаменов. Объясняют те же репетиторы, а фразы на иностранном языке можно прослушать.</p></header>
+  <header class="sec-h"><p class="eyebrow">OAA · раздел 3 · иностранные языки</p><h2>Иностранные языки: от A2 до C1</h2><p>${LANGS.length} углублённых курсов по ${Math.round(LANG_TOTAL / LANGS.length)} уроков: грамматика уровней B1, B2 и C1, лексика, стратегии экзаменов. Объясняют те же репетиторы, а фразы на иностранном языке можно прослушать.</p></header>
   <div class="grid-subj">${LANGS.map(cardSubj).join('')}</div>
   <div class="cta" style="margin-top:28px"><a class="btn btn-red" href="#lang">Открыть раздел языков <span aria-hidden="true">→</span></a></div>
 </section>`;
@@ -766,7 +832,7 @@ ${window.IQ ? iqPromo() : ''}
     return `
 <section class="wrap lang-page">
   <nav class="crumbs" aria-label="Навигация"><a href="#home">Предметы</a><span>/</span><span aria-current="page">Иностранные языки</span></nav>
-  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 2</p><h1 class="h1">Иностранные языки</h1><p>${LANGS.length} углублённых курсов — английский, немецкий, французский, польский, китайский и японский. Каждый ведёт от уверенного A2 к C1: ${Math.round(LANG_TOTAL / LANGS.length)} уроков, по восемь на уровни B1, B2 и C1, и специальный экзамен в конце.</p></header>
+  <header class="sec-h" style="margin-top:20px"><p class="eyebrow">OAA · раздел 3</p><h1 class="h1">Иностранные языки</h1><p>${LANGS.length} углублённых курсов — английский, немецкий, французский, польский, китайский и японский. Каждый ведёт от уверенного A2 к C1: ${Math.round(LANG_TOTAL / LANGS.length)} уроков, по восемь на уровни B1, B2 и C1, и специальный экзамен в конце.</p></header>
   ${vnHTML({ a: 'Язык не учат темами, его учат уровнями. На каждом уровне меняется не столько словарь, сколько то, что ты умеешь делать: на B1 — рассказывать, на B2 — спорить, на C1 — выбирать точное слово под ситуацию. Курс показывает, что нужно на каждом шаге. Но часы практики за тебя не проведёт никто.', i: 'Сэмпай, выбирай язык по сердцу, а не по моде ♡ Кстати, все фразы с пунктирным подчёркиванием можно послушать — нажми, и браузер прочитает их вслух. Подражай произношению, это лучше любой транскрипции!' })}
   <div class="cefr">${CEFR.map(([lv, name, can]) => `<div class="cefr-c"><b>${lv}</b><span>${name}</span><p>${can}</p></div>`).join('')}</div>
   <div class="grid-subj">${LANGS.map(cardSubj).join('')}</div>
@@ -1487,7 +1553,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
         <li><b>В конце курса сдай специальный экзамен.</b> Десять случайных вопросов покажут, какие темы держатся, а какие — нет.</li>
       </ol>
       <h2>Что внутри</h2>
-      <p>${SCHOOL.length} школьных предметов и ${SCHOOL_TOTAL} уроков: ${SCHOOL.map(s => `${s.name.toLowerCase()} (${s.lessons.length})`).join(', ')}. Раздел иностранных языков — ${LANGS.length} курсов от A2 до C1 и ${LANG_TOTAL} уроков: ${LANGS.map(s => s.name.toLowerCase()).join(', ')}. Раздел программирования — ${PROGS.length} курсов до уровня Junior и ${PROG_TOTAL} уроков: ${PROGS.map(s => s.name).join(', ')}. Каждый урок — это вступление, цели, теория с разбором примеров и ловушками, практика с решениями, тест и конспект.</p>
+      <p>${SCHOOL.length} школьных предметов и ${SCHOOL_TOTAL} уроков: ${SCHOOL.map(s => `${s.name.toLowerCase()} (${s.lessons.length})`).join(', ')}. Подготовка к ЕГЭ с нуля — ${EGES.length} курса и ${EGE_TOTAL} уроков: ${EGES.map(s => s.name.replace('ЕГЭ · ', '').toLowerCase()).join(', ')}. Раздел иностранных языков — ${LANGS.length} курсов от A2 до C1 и ${LANG_TOTAL} уроков: ${LANGS.map(s => s.name.toLowerCase()).join(', ')}. Раздел программирования — ${PROGS.length} курсов до уровня Junior и ${PROG_TOTAL} уроков: ${PROGS.map(s => s.name).join(', ')}. Каждый урок — это вступление, цели, теория с разбором примеров и ловушками, практика с решениями, тест и конспект.</p>
       <p class="fine">Неофициальный фан-проект. Аянокоджи Киётака и Амасава Ичика — персонажи серии ранобэ «Добро пожаловать в класс превосходства» (Classroom of the Elite) Сёго Кинугасы; права на персонажей принадлежат правообладателям. Иллюстрации — фан-арты, подписи авторов сохранены на изображениях. Учебные тексты написаны по школьной программе 8–11 классов и помогают разобраться в учебнике, а не заменяют его.</p>
     </div>
   </div>
@@ -1516,8 +1582,8 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
 
   /* ---------- маршрутизация ---------- */
   const viewEl = $('#view'), shut = $('#shutter');
-  const VIEWS = Object.assign({ home: vHome, lang: vLang, prog: vProg, subject: vSubject, lesson: vLesson, exam: vExam, progress: vProgress, about: vAbout, missing: vMissing }, (window.IQ && window.IQ.views) || {});
-  const MOUNT = Object.assign({ home: mHome, lang: () => typeVN(), prog: () => typeVN(), subject: mSubject, lesson: mLesson, exam: mExam, progress: mProgress, about: () => typeVN(), missing: () => typeVN() }, (window.IQ && window.IQ.mounts) || {});
+  const VIEWS = Object.assign({ home: vHome, ege: vEge, lang: vLang, prog: vProg, subject: vSubject, lesson: vLesson, exam: vExam, progress: vProgress, about: vAbout, missing: vMissing }, (window.IQ && window.IQ.views) || {});
+  const MOUNT = Object.assign({ home: mHome, ege: () => typeVN(), lang: () => typeVN(), prog: () => typeVN(), subject: mSubject, lesson: mLesson, exam: mExam, progress: mProgress, about: () => typeVN(), missing: () => typeVN() }, (window.IQ && window.IQ.mounts) || {});
   let cur = { v: '' }, cleanups = [];
   function onCleanup(f) { cleanups.push(f); }
 
@@ -1526,6 +1592,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     let m;
     if (!h || h === 'home') return { v: 'home' };
     if (h === 'subjects' || h === 'tutors') return { v: 'home', anchor: h };
+    if (h === 'ege') return { v: 'ege' };
     if (h === 'lang') return { v: 'lang' };
     if (h === 'prog') return { v: 'prog' };
     if ((m = h.match(/^s-([a-z]+)$/)) && byId[m[1]]) return { v: 'subject', sid: m[1] };
@@ -1568,9 +1635,9 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
     try { html = await VIEWS[r.v](r); } catch (e) { console.error(e); html = vMissing(); }
     viewEl.innerHTML = html;
     cur = r; curHash = hash;
+    const sec = r.sid && byId[r.sid] && byId[r.sid].section;
     const navKey = r.v === 'progress' || r.v === 'about' ? r.v : r.v.startsWith('iq') ? 'iq'
-      : r.v === 'lang' || (r.sid && byId[r.sid] && byId[r.sid].section === 'lang') ? 'lang'
-        : r.v === 'prog' || (r.sid && byId[r.sid] && byId[r.sid].section === 'prog') ? 'prog' : 'home';
+      : ['ege', 'lang', 'prog'].includes(r.v) ? r.v : sec || 'home';
     $$('.nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === navKey));
     window.scrollTo({ top: 0, behavior: 'instant' });
     try { (MOUNT[r.v] || (() => {}))(r); } catch (e) { console.error(e); }
@@ -1702,7 +1769,7 @@ ${wrong.length ? `<div><p class="lbl">Стоит повторить</p><ul>${wro
 
   /* ---------- поиск ---------- */
   const IDX = [];
-  SUBJ.forEach(s => s.lessons.forEach((l, i) => IDX.push({ sid: s.id, n: i + 1, g: s.section ? l[0] : l[0] + ' кл', t: l[1], s: s.name, h: s.hue, k: (l[1] + ' ' + s.name + ' ' + (s.section === 'lang' ? 'язык ' + l[0] : s.section === 'prog' ? 'программирование код ' + l[0] : '')).toLowerCase().replace(/ё/g, 'е') })));
+  SUBJ.forEach(s => s.lessons.forEach((l, i) => IDX.push({ sid: s.id, n: i + 1, g: s.section ? l[0] : l[0] + ' кл', t: l[1], s: s.name, h: s.hue, k: (l[1] + ' ' + s.name + ' ' + (s.section === 'lang' ? 'язык ' + l[0] : s.section === 'prog' ? 'программирование код ' + l[0] : s.section === 'ege' ? 'егэ экзамен подготовка ' + l[0] : '')).toLowerCase().replace(/ё/g, 'е') })));
   const pal = $('#pal'), palIn = $('#palIn'), palList = $('#palList');
   let palLastFocus = null;
   function renderPal(q) {
